@@ -7,7 +7,7 @@ omniagentpay-js/node_modules/
 .env.*
 *.pem
 *.key
-omniagentpay_recovery.txt
+
 secrets.json
 
 # Python
