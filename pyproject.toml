@@ -66,6 +66,7 @@ dev = [
     "hatch>=1.14.1",
     "twine>=6.1.0",
     "build>=1.0.0",
+    "pyinstaller>=6.3.0",
 ]
 
 [project.urls]

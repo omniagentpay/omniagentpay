@@ -152,7 +152,7 @@ class CircleClient:
                     "walletSetId": wallet_set_id,
                     "blockchains": [blockchain_str],
                     "count": count,
-                    "accountType": account_type.value,
+                    "accountType": account_type.value if hasattr(account_type, "value") else str(account_type),
                     "idempotencyKey": idempotency_key,
                     "entitySecretCiphertext": ciphertext,
                 }
