@@ -9,66 +9,69 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
 from enum import Enum
-from typing import Any, Union
-from typing_extensions import TypeAlias  # For older python compatibility
+from typing import (
+    Any,
+    TypeAlias,  # For older python compatibility
+)
 
 # Type alias for flexible amount input
-AmountType: TypeAlias = Union[Decimal, int, float, str]
+AmountType: TypeAlias = Decimal | int | float | str
+
 
 class Network(str, Enum):
     """Supported blockchain networks for Circle Developer-Controlled Wallets."""
-    
+
     # Ethereum
     ETH = "ETH"
     ETH_SEPOLIA = "ETH-SEPOLIA"
-    
+
     # Avalanche
     AVAX = "AVAX"
     AVAX_FUJI = "AVAX-FUJI"
-    
+
     # Polygon
     MATIC = "MATIC"
     MATIC_AMOY = "MATIC-AMOY"
-    
+
     # Solana
     SOL = "SOL"
     SOL_DEVNET = "SOL-DEVNET"
-    
+
     # Arbitrum
     ARB = "ARB"
     ARB_SEPOLIA = "ARB-SEPOLIA"
-    
+
     # Base
     BASE = "BASE"
     BASE_SEPOLIA = "BASE-SEPOLIA"
-    
+
     # Optimism
     OP = "OP"
     OP_SEPOLIA = "OP-SEPOLIA"
-    
+
     # Near
     NEAR = "NEAR"
     NEAR_TESTNET = "NEAR-TESTNET"
-    
+
     # Aptos
     APTOS = "APTOS"
     APTOS_TESTNET = "APTOS-TESTNET"
-    
+
     # Unichain
     UNI = "UNI"
     UNI_SEPOLIA = "UNI-SEPOLIA"
-    
+
     # Monad
     MONAD = "MONAD"
     MONAD_TESTNET = "MONAD-TESTNET"
-    
+
     # Arc
     ARC_TESTNET = "ARC-TESTNET"
-    
+
     # Multi-chain
     EVM = "EVM"
     EVM_TESTNET = "EVM-TESTNET"
-    
+
     @classmethod
     def from_string(cls, value: str) -> "Network":
         value_upper = value.upper().replace("_", "-")
@@ -76,73 +79,79 @@ class Network(str, Enum):
             if member.value == value_upper:
                 return member
         raise ValueError(f"Unknown network: {value}. Supported: {[n.value for n in cls]}")
-    
+
     def is_testnet(self) -> bool:
         testnet_suffix = ("-SEPOLIA", "-TESTNET", "-FUJI", "-DEVNET", "-AMOY")
         return self.value.endswith(testnet_suffix) or self == Network.ARC_TESTNET
-    
+
     def is_evm(self) -> bool:
-        non_evm = (Network.SOL, Network.SOL_DEVNET, Network.NEAR, Network.NEAR_TESTNET,
-                   Network.APTOS, Network.APTOS_TESTNET)
+        non_evm = (
+            Network.SOL,
+            Network.SOL_DEVNET,
+            Network.NEAR,
+            Network.NEAR_TESTNET,
+            Network.APTOS,
+            Network.APTOS_TESTNET,
+        )
         return self not in non_evm
-    
+
     def is_solana(self) -> bool:
         return self in (Network.SOL, Network.SOL_DEVNET)
 
 
 class PaymentMethod(str, Enum):
     """Payment method types."""
-    
-    X402 = "x402"              # HTTP 402 protocol payment
-    TRANSFER = "transfer"       # Direct wallet-to-wallet transfer
-    CROSSCHAIN = "crosschain"   # Cross-chain transfer (Gateway/CCTP/Bridge Kit)
+
+    X402 = "x402"  # HTTP 402 protocol payment
+    TRANSFER = "transfer"  # Direct wallet-to-wallet transfer
+    CROSSCHAIN = "crosschain"  # Cross-chain transfer (Gateway/CCTP/Bridge Kit)
 
 
 class PaymentStatus(str, Enum):
     """Payment transaction status."""
-    
-    PENDING = "pending"         # Payment initiated but not yet processing
-    PROCESSING = "processing"   # Payment is being processed on-chain
-    COMPLETED = "completed"     # Payment successfully completed
-    FAILED = "failed"           # Payment failed
-    CANCELLED = "cancelled"     # Payment was cancelled
-    BLOCKED = "blocked"         # Payment was blocked by a guard
+
+    PENDING = "pending"  # Payment initiated but not yet processing
+    PROCESSING = "processing"  # Payment is being processed on-chain
+    COMPLETED = "completed"  # Payment successfully completed
+    FAILED = "failed"  # Payment failed
+    CANCELLED = "cancelled"  # Payment was cancelled
+    BLOCKED = "blocked"  # Payment was blocked by a guard
 
 
 class PaymentIntentStatus(str, Enum):
     """Status of a PaymentIntent."""
-    
+
     REQUIRES_CONFIRMATION = "requires_confirmation"  # Created, ready to confirm
-    PROCESSING = "processing"                        # Executive in progress
-    SUCCEEDED = "succeeded"                          # Completed successfully
-    CANCELED = "canceled"                            # Canceled by user/agent
-    FAILED = "failed"                                # Execution failed
+    PROCESSING = "processing"  # Executive in progress
+    SUCCEEDED = "succeeded"  # Completed successfully
+    CANCELED = "canceled"  # Canceled by user/agent
+    FAILED = "failed"  # Execution failed
 
 
 class WalletState(str, Enum):
     """Wallet lifecycle state from Circle API."""
-    
+
     LIVE = "LIVE"
     FROZEN = "FROZEN"
 
 
 class AccountType(str, Enum):
     """Wallet account type."""
-    
+
     SCA = "SCA"  # Smart Contract Account (EVM chains)
     EOA = "EOA"  # Externally Owned Account (native signing)
 
 
 class CustodyType(str, Enum):
     """Wallet custody type."""
-    
+
     DEVELOPER = "DEVELOPER"  # Developer-controlled wallet
-    ENDUSER = "ENDUSER"      # User-controlled wallet
+    ENDUSER = "ENDUSER"  # User-controlled wallet
 
 
 class TransactionState(str, Enum):
     """Transaction state from Circle API."""
-    
+
     INITIATED = "INITIATED"
     PENDING = "PENDING"
     QUEUED = "QUEUED"
@@ -151,11 +160,12 @@ class TransactionState(str, Enum):
     COMPLETE = "COMPLETE"
     FAILED = "FAILED"
     CANCELLED = "CANCELLED"
+    CLEARED = "CLEARED"
 
 
 class FeeLevel(str, Enum):
     """Fee level for transactions."""
-    
+
     LOW = "LOW"
     MEDIUM = "MEDIUM"
     HIGH = "HIGH"
@@ -164,7 +174,7 @@ class FeeLevel(str, Enum):
 @dataclass
 class TokenInfo:
     """Token information from Circle API."""
-    
+
     id: str
     blockchain: str
     symbol: str
@@ -173,7 +183,7 @@ class TokenInfo:
     is_native: bool
     token_address: str | None = None
     standard: str | None = None
-    
+
     @classmethod
     def from_api_response(cls, data: dict[str, Any]) -> "TokenInfo":
         return cls(
@@ -191,14 +201,14 @@ class TokenInfo:
 @dataclass
 class Balance:
     """Wallet token balance."""
-    
+
     amount: Decimal
     token: TokenInfo
-    
+
     @property
     def currency(self) -> str:
         return self.token.symbol
-    
+
     @classmethod
     def from_api_response(cls, data: dict[str, Any]) -> "Balance":
         return cls(
@@ -210,13 +220,13 @@ class Balance:
 @dataclass
 class WalletSetInfo:
     """Wallet set information from Circle API."""
-    
+
     id: str
     name: str | None
     custody_type: CustodyType
     create_date: datetime
     update_date: datetime
-    
+
     @classmethod
     def from_api_response(cls, data: dict[str, Any]) -> "WalletSetInfo":
         def parse_dt(val: str | datetime | None) -> datetime | None:
@@ -240,7 +250,7 @@ class WalletSetInfo:
 @dataclass
 class WalletInfo:
     """Wallet information from Circle API."""
-    
+
     id: str
     address: str
     blockchain: str
@@ -251,7 +261,7 @@ class WalletInfo:
     name: str | None = None
     create_date: datetime | None = None
     update_date: datetime | None = None
-    
+
     @classmethod
     def from_api_response(cls, data: dict[str, Any]) -> "WalletInfo":
         def parse_dt(val: str | datetime | None) -> datetime | None:
@@ -280,7 +290,7 @@ class WalletInfo:
 @dataclass
 class TransactionInfo:
     """Transaction information from Circle API."""
-    
+
     id: str
     state: TransactionState
     blockchain: str | None = None
@@ -294,7 +304,7 @@ class TransactionInfo:
     create_date: datetime | None = None
     update_date: datetime | None = None
     error_reason: str | None = None
-    
+
     @classmethod
     def from_api_response(cls, data: dict[str, Any]) -> "TransactionInfo":
         def parse_dt(val: str | datetime | None) -> datetime | None:
@@ -321,18 +331,23 @@ class TransactionInfo:
             update_date=parse_dt(data.get("updateDate")),
             error_reason=data.get("errorReason"),
         )
-    
+
     def is_terminal(self) -> bool:
-        return self.state in (TransactionState.COMPLETE, TransactionState.FAILED, TransactionState.CANCELLED)
-    
+        return self.state in (
+            TransactionState.COMPLETE,
+            TransactionState.FAILED,
+            TransactionState.CANCELLED,
+            TransactionState.CLEARED,
+        )
+
     def is_successful(self) -> bool:
-        return self.state == TransactionState.COMPLETE
+        return self.state in (TransactionState.COMPLETE, TransactionState.CLEARED)
 
 
 @dataclass
 class PaymentRequest:
     """Payment request to be processed by the SDK."""
-    
+
     wallet_id: str
     recipient: str
     amount: Decimal
@@ -340,7 +355,7 @@ class PaymentRequest:
     idempotency_key: str | None = None
     destination_chain: Network | str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
-    
+
     def __post_init__(self) -> None:
         if self.amount <= 0:
             raise ValueError("Amount must be positive")
@@ -353,7 +368,7 @@ class PaymentRequest:
 @dataclass
 class PaymentIntent:
     """A payment intent represents a planned payment."""
-    
+
     id: str
     wallet_id: str
     recipient: str
@@ -364,7 +379,7 @@ class PaymentIntent:
     expires_at: datetime | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
     client_secret: str | None = None
-    
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "id": self.id,
@@ -389,15 +404,18 @@ class PaymentIntent:
             currency=data["currency"],
             status=PaymentIntentStatus(data["status"]),
             created_at=datetime.fromisoformat(data["created_at"]),
-            expires_at=datetime.fromisoformat(data["expires_at"]) if data.get("expires_at") else None,
+            expires_at=datetime.fromisoformat(data["expires_at"])
+            if data.get("expires_at")
+            else None,
             metadata=data.get("metadata", {}),
             client_secret=data.get("client_secret"),
         )
 
+
 @dataclass
 class PaymentResult:
     """Result of a payment operation."""
-    
+
     success: bool
     transaction_id: str | None
     blockchain_tx: str | None
@@ -414,7 +432,7 @@ class PaymentResult:
 @dataclass
 class SimulationResult:
     """Result of a payment simulation."""
-    
+
     would_succeed: bool
     route: PaymentMethod
     guards_that_would_pass: list[str] = field(default_factory=list)
@@ -426,12 +444,13 @@ class SimulationResult:
 @dataclass
 class BatchPaymentResult:
     """Result of a batch payment operation."""
-    
+
     total_count: int
     success_count: int
     failed_count: int
     results: list[PaymentResult]
     transaction_ids: list[str] = field(default_factory=list)
+
 
 # Token IDs for USDC on different networks (from Circle)
 USDC_TOKEN_IDS: dict[Network, str] = {
@@ -446,4 +465,3 @@ USDC_TOKEN_IDS: dict[Network, str] = {
     Network.SOL_DEVNET: "",
     Network.SOL: "",
 }
-

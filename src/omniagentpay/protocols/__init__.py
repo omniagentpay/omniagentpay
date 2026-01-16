@@ -8,9 +8,9 @@ Adapters handle the specifics of each payment protocol:
 """
 
 from omniagentpay.protocols.base import ProtocolAdapter
+from omniagentpay.protocols.gateway import CrosschainDestination, GatewayAdapter
 from omniagentpay.protocols.transfer import TransferAdapter
-from omniagentpay.protocols.x402 import X402Adapter, PaymentRequirements, PaymentPayload
-from omniagentpay.protocols.gateway import GatewayAdapter, CrosschainDestination
+from omniagentpay.protocols.x402 import PaymentPayload, PaymentRequirements, X402Adapter
 
 __all__ = [
     # Base

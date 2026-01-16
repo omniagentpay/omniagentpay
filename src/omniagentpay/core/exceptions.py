@@ -13,21 +13,21 @@ from typing import Any
 class OmniAgentPayError(Exception):
     """
     Base exception for all OmniAgentPay SDK errors.
-    
+
     Catch this to handle any SDK-related exception.
-    
+
     Example:
         >>> try:
         ...     client.pay(...)
         ... except OmniAgentPayError as e:
         ...     print(f"Payment SDK error: {e}")
     """
-    
+
     def __init__(self, message: str, details: dict[str, Any] | None = None) -> None:
         super().__init__(message)
         self.message = message
         self.details = details or {}
-    
+
     def __str__(self) -> str:
         if self.details:
             return f"{self.message} | Details: {self.details}"
@@ -37,25 +37,26 @@ class OmniAgentPayError(Exception):
 class ConfigurationError(OmniAgentPayError):
     """
     Configuration is missing or invalid.
-    
+
     Raised when:
     - Required configuration values are not provided
     - Configuration values fail validation
     - Environment variables are not set
     """
+
     pass
 
 
 class WalletError(OmniAgentPayError):
     """
     Wallet operation failed.
-    
+
     Raised when:
     - Wallet creation fails
     - Wallet not found
     - Wallet is in invalid state (e.g., frozen)
     """
-    
+
     def __init__(
         self,
         message: str,
@@ -69,13 +70,13 @@ class WalletError(OmniAgentPayError):
 class PaymentError(OmniAgentPayError):
     """
     Base exception for payment-related errors.
-    
+
     Raised when:
     - Payment fails to execute
     - Payment validation fails
     - External services return errors
     """
-    
+
     def __init__(
         self,
         message: str,
@@ -91,20 +92,20 @@ class PaymentError(OmniAgentPayError):
 class GuardError(PaymentError):
     """
     A guard rejected the payment.
-    
+
     Raised when:
     - BudgetGuard: Daily/weekly/monthly spending limit exceeded
     - RateLimitGuard: Too many transactions in time window
     - SingleTxGuard: Transaction amount exceeds maximum
     - RecipientGuard: Recipient not in allowlist
-    
+
     Example:
         >>> try:
         ...     client.pay("https://api.expensive.com", "1000.00")
         ... except GuardError as e:
         ...     print(f"Blocked by {e.guard_name}: {e.reason}")
     """
-    
+
     def __init__(
         self,
         message: str,
@@ -117,7 +118,7 @@ class GuardError(PaymentError):
         super().__init__(message, recipient, amount, details)
         self.guard_name = guard_name
         self.reason = reason
-    
+
     def __str__(self) -> str:
         return f"[{self.guard_name}] {self.reason}"
 
@@ -125,13 +126,13 @@ class GuardError(PaymentError):
 class ProtocolError(PaymentError):
     """
     Protocol adapter error.
-    
+
     Raised when:
     - Protocol-specific parsing fails
     - Invalid protocol response
     - Unsupported protocol features
     """
-    
+
     def __init__(
         self,
         message: str,
@@ -140,7 +141,7 @@ class ProtocolError(PaymentError):
     ) -> None:
         super().__init__(message, details=details)
         self.protocol = protocol
-    
+
     def __str__(self) -> str:
         return f"[{self.protocol}] {self.message}"
 
@@ -148,23 +149,24 @@ class ProtocolError(PaymentError):
 class ValidationError(OmniAgentPayError):
     """
     Input validation error.
-    
+
     Raised when:
     - Required parameters are missing
     - Parameter values are invalid
     """
+
     pass
 
 
 class InsufficientBalanceError(PaymentError):
     """
     Wallet does not have enough balance for the payment.
-    
+
     Raised when:
     - Wallet balance is less than payment amount
     - Balance check fails before payment execution
     """
-    
+
     def __init__(
         self,
         message: str,
@@ -178,7 +180,7 @@ class InsufficientBalanceError(PaymentError):
         self.required_amount = required_amount
         self.wallet_id = wallet_id
         self.shortfall = required_amount - current_balance
-    
+
     def __str__(self) -> str:
         return (
             f"{self.message} | "
@@ -190,13 +192,13 @@ class InsufficientBalanceError(PaymentError):
 class NetworkError(OmniAgentPayError):
     """
     Network or API communication error.
-    
+
     Raised when:
     - HTTP request fails (timeout, connection error)
     - API returns unexpected response
     - Rate limiting encountered
     """
-    
+
     def __init__(
         self,
         message: str,
@@ -207,11 +209,11 @@ class NetworkError(OmniAgentPayError):
         super().__init__(message, details)
         self.status_code = status_code
         self.url = url
-    
+
     def is_rate_limited(self) -> bool:
         """Check if this is a rate limit error."""
         return self.status_code == 429
-    
+
     def is_server_error(self) -> bool:
         """Check if this is a server-side error."""
         return self.status_code is not None and 500 <= self.status_code < 600
@@ -220,14 +222,14 @@ class NetworkError(OmniAgentPayError):
 class X402Error(PaymentError):
     """
     x402 protocol error.
-    
+
     Raised when:
     - Server returns 402 but payment requirements are invalid
     - Payment signature verification fails
     - Settlement fails
     - Resource access denied after payment
     """
-    
+
     def __init__(
         self,
         message: str,
@@ -238,7 +240,7 @@ class X402Error(PaymentError):
         super().__init__(message, recipient=url, details=details)
         self.url = url
         self.stage = stage
-    
+
     def __str__(self) -> str:
         return f"[x402:{self.stage}] {self.message} (URL: {self.url})"
 
@@ -246,13 +248,13 @@ class X402Error(PaymentError):
 class CrosschainError(PaymentError):
     """
     Cross-chain transfer error.
-    
+
     Raised when:
     - Bridge Kit transfer fails
     - CCTP attestation not received
     - Gateway deposit/mint fails
     """
-    
+
     def __init__(
         self,
         message: str,
@@ -265,7 +267,7 @@ class CrosschainError(PaymentError):
         self.source_chain = source_chain
         self.destination_chain = destination_chain
         self.method = method
-    
+
     def __str__(self) -> str:
         return (
             f"[crosschain:{self.method}] {self.message} "
@@ -276,12 +278,12 @@ class CrosschainError(PaymentError):
 class TransactionTimeoutError(PaymentError):
     """
     Transaction timed out waiting for confirmation.
-    
+
     Raised when:
     - Transaction is pending for too long
     - Polling for transaction status exceeded timeout
     """
-    
+
     def __init__(
         self,
         message: str,
@@ -299,12 +301,12 @@ class TransactionTimeoutError(PaymentError):
 class IdempotencyError(PaymentError):
     """
     Idempotency key conflict.
-    
+
     Raised when:
     - Same idempotency key used with different parameters
     - Previous payment with same key has different outcome
     """
-    
+
     def __init__(
         self,
         message: str,

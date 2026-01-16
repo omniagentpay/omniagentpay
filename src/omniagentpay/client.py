@@ -6,78 +6,77 @@ Multi-tenant architecture: supports multiple agents/wallets with per-wallet guar
 
 from __future__ import annotations
 
-from decimal import Decimal
-from datetime import datetime
-from typing import Any, Union
 import os
 import uuid
-import logging
+from datetime import datetime
+from decimal import Decimal
+from typing import Any
 
-
-from omniagentpay.core.config import Config
 from omniagentpay.core.circle_client import CircleClient
+from omniagentpay.core.config import Config
 from omniagentpay.core.exceptions import PaymentError, ValidationError
 from omniagentpay.core.types import (
+    AccountType,
     AmountType,
+    BatchPaymentResult,
     FeeLevel,
     Network,
+    PaymentIntent,
+    PaymentIntentStatus,
     PaymentMethod,
+    PaymentRequest,
     PaymentResult,
     PaymentStatus,
     SimulationResult,
-    PaymentIntent,
-    PaymentIntentStatus,
-    BatchPaymentResult,
-    PaymentRequest,
+    TransactionInfo,
     WalletInfo,
     WalletSetInfo,
-    AccountType,
 )
-from omniagentpay.wallet.service import WalletService
+from omniagentpay.guards.base import PaymentContext
+from omniagentpay.guards.manager import GuardManager
+from omniagentpay.intents.service import PaymentIntentService
+from omniagentpay.ledger import Ledger, LedgerEntry, LedgerEntryStatus
+from omniagentpay.payment.batch import BatchProcessor
 from omniagentpay.payment.router import PaymentRouter
+from omniagentpay.protocols.gateway import GatewayAdapter
 from omniagentpay.protocols.transfer import TransferAdapter
 from omniagentpay.protocols.x402 import X402Adapter
-from omniagentpay.protocols.gateway import GatewayAdapter
-from omniagentpay.guards.base import Guard, GuardChain, PaymentContext
-from omniagentpay.guards.manager import GuardManager
-from omniagentpay.ledger import Ledger, LedgerEntry, LedgerEntryStatus, LedgerEntryType
-from omniagentpay.storage import get_storage, StorageBackend
-from omniagentpay.intents.service import PaymentIntentService
-from omniagentpay.payment.batch import BatchProcessor
+from omniagentpay.storage import get_storage
+from omniagentpay.wallet.service import WalletService
 from omniagentpay.webhooks import WebhookParser
 
 
 class OmniAgentPay:
     """
     Main client for OmniAgentPay SDK.
-    
+
     Multi-tenant design: serves multiple agents/wallets with per-wallet guards.
-    
+
     Initialization requires only:
     - circle_api_key
     - entity_secret
     - network
-    
+
     All operations require explicit wallet_id.
-    
+
     Example:
         >>> from omniagentpay import OmniAgentPay, BudgetGuard
         >>> from decimal import Decimal
-        >>> 
+        >>>
         >>> # Initialize client (multi-tenant)
         >>> client = OmniAgentPay(
         ...     circle_api_key="sk_...",
         ...     entity_secret="...",
         ...     network=Network.ARC_TESTNET,
         ... )
-        >>> 
+        >>>
         >>> # Create wallet for an agent
         >>> wallet_set = client.wallet.create_wallet_set(name="agent-1")
         >>> wallet = client.wallet.create_wallet(wallet_set_id=wallet_set.id)
-        >>> 
+        >>>
         >>> # Add guards for this wallet
         >>> client.guards.add_guard(wallet.id, BudgetGuard(daily_limit=Decimal("100")))
-        >>> 
+        >>>
         >>> # Make a payment (wallet_id required)
         >>> result = await client.pay(
         ...     wallet_id=wallet.id,
@@ -85,125 +84,132 @@ class OmniAgentPay:
         ...     amount=Decimal("10.00"),
         ... )
     """
-    
+
     def __init__(
         self,
         circle_api_key: str | None = None,
         entity_secret: str | None = None,
         network: Network = Network.ARC_TESTNET,
-        log_level: int = logging.INFO,
+        log_level: int | str | None = None,
     ) -> None:
         """
         Initialize OmniAgentPay client.
-        
+
         Args:
             circle_api_key: Circle API key (or from CIRCLE_API_KEY env)
             entity_secret: Entity secret for signing (or from ENTITY_SECRET env)
             network: Target blockchain network
             log_level: Logging level (default INFO). Set to logging.DEBUG for full traceability.
         """
+        # Determine log level
+        if log_level is None:
+            log_level = os.environ.get("OMNIAGENTPAY_LOG_LEVEL", "INFO")
+
         # Configure logging immediately
         from omniagentpay.core.logging import configure_logging, get_logger
+
         configure_logging(level=log_level)
         self._logger = get_logger("client")
-        
+
         self._logger.info(f"Initializing OmniAgentPay SDK (Network: {network.value})")
 
         if not circle_api_key:
             circle_api_key = os.environ.get("CIRCLE_API_KEY")
-        
+
         if not entity_secret:
             entity_secret = os.environ.get("ENTITY_SECRET")
-            
+
         # Auto-setup entity secret if missing but API key is present
         if circle_api_key and not entity_secret:
             self._logger.info("Entity secret not found. Running auto-setup...")
             try:
                 from omniagentpay.onboarding import auto_setup_entity_secret
+
                 entity_secret = auto_setup_entity_secret(circle_api_key, logger=self._logger)
                 self._logger.info("Entity secret auto-generated and registered.")
             except Exception as e:
-                self._logger.error(f"Auto-setup failed: {e}. SDK may not work.")
-                
+                self._logger.error(
+                    f"Auto-setup failed: {e}\n"
+                    "Please set ENTITY_SECRET in your .env file or run:\n"
+                    "  from omniagentpay.onboarding import quick_setup\n"
+                    "  quick_setup('YOUR_API_KEY')"
+                )
+                raise
+
         if not circle_api_key:
             self._logger.warning("CIRCLE_API_KEY not set. SDK will fail.")
 
         # Build config
-        self._config = Config(
+        # Build config using from_env to pick up defaults and other env vars
+        self._config = Config.from_env(
             circle_api_key=circle_api_key,
             entity_secret=entity_secret,
             network=network,
         )
-        
+
         # Storage and Ledger
         self._storage = get_storage()  # Load from env or default to memory
         self._ledger = Ledger(self._storage)
-        
+
         # Guard manager (per-wallet/wallet-set) - inject storage
         self._guard_manager = GuardManager(self._storage)
-        
+
         # Core services (initialized immediately)
         self._circle_client = CircleClient(self._config)
-        
+
         self._wallet_service = WalletService(
             self._config,
             self._circle_client,
         )
-        
+
         # Router with default adapters
         self._router = PaymentRouter(self._config, self._wallet_service)
-        
-        # Register adapters (Transfer, X402, Gateway)
-        self._router.register_adapter(
-            TransferAdapter(self._config, self._wallet_service)
-        )
-        self._router.register_adapter(
-            X402Adapter(self._config, self._wallet_service)
-        )
 
-        self._router.register_adapter(
-            GatewayAdapter(self._config, self._wallet_service)
-        )
-        
+        # Register adapters (Transfer, X402, Gateway)
+        self._router.register_adapter(TransferAdapter(self._config, self._wallet_service))
+        self._router.register_adapter(X402Adapter(self._config, self._wallet_service))
+
+        self._router.register_adapter(GatewayAdapter(self._config, self._wallet_service))
+
         # Payment Intents
         self._intent_service = PaymentIntentService(self._storage)
-        
+
         # Batch Processor
         self._batch_processor = BatchProcessor(self._router)
 
         # Webhooks
         self._webhook_parser = WebhookParser()
-    
+
     # ==================== Properties ====================
-    
+
     @property
     def config(self) -> Config:
         """Get SDK configuration."""
         return self._config
-    
+
     @property
     def wallet(self) -> WalletService:
         """Get wallet service for wallet management."""
         return self._wallet_service
-    
+
     @property
     def guards(self) -> GuardManager:
         """Get the guard manager for per-wallet/wallet-set guards."""
         return self._guard_manager
-    
+
     @property
     def ledger(self) -> Ledger:
         """Get the transaction ledger."""
         return self._ledger
-    
+
     @property
     def webhooks(self) -> WebhookParser:
         """Get webhook parser for verifying and parsing events."""
         return self._webhook_parser
 
     # ==================== Context Manager ====================
-    
-    async def __aenter__(self) -> "OmniAgentPay":
+
+    async def __aenter__(self) -> OmniAgentPay:
         """Async context manager entry."""
         return self
 
@@ -213,21 +219,21 @@ class OmniAgentPay:
         pass
 
     # ==================== Quick Helpers ====================
-    
+
     async def get_balance(self, wallet_id: str) -> Decimal:
         """
         Get USDC balance for a wallet.
-        
+
         Args:
             wallet_id: Wallet ID to check
-            
+
         Returns:
             USDC balance as Decimal
         """
-        return await self._wallet_service.get_usdc_balance_amount(wallet_id)
+        return self._wallet_service.get_usdc_balance_amount(wallet_id)
 
     # ==================== Wallet Operations ====================
-    
+
     async def create_wallet(
         self,
         blockchain: Network | str | None = None,
@@ -237,13 +243,13 @@ class OmniAgentPay:
     ) -> WalletInfo:
         """
         Create a new wallet.
-        
+
         Args:
             blockchain: Blockchain network (default: config.network)
             wallet_set_id: ID of existing wallet set. If None, creates a new set using `name` or default.
             account_type: Wallet type (EOA or SCA)
             name: Name for new wallet set if creating one (default: "default-set")
-            
+
         Returns:
             Created WalletInfo
         """
@@ -252,7 +258,7 @@ class OmniAgentPay:
             set_name = name or f"set-{uuid.uuid4().hex[:8]}"
             wallet_set = self._wallet_service.create_wallet_set(name=set_name)
             wallet_set_id = wallet_set.id
-            
+
         return self._wallet_service.create_wallet(
             wallet_set_id=wallet_set_id,
             blockchain=blockchain,
@@ -262,7 +268,7 @@ class OmniAgentPay:
     async def create_wallet_set(self, name: str | None = None) -> WalletSetInfo:
         """Create a new wallet set."""
         return self._wallet_service.create_wallet_set(name)
-        
+
     async def list_wallets(self, wallet_set_id: str | None = None) -> list[WalletInfo]:
         """List wallets (optional filter by set)."""
         return self._wallet_service.list_wallets(wallet_set_id)
@@ -270,13 +276,28 @@ class OmniAgentPay:
     async def list_wallet_sets(self) -> list[WalletSetInfo]:
         """List available wallet sets."""
         return self._wallet_service.list_wallet_sets()
-        
+
     async def get_wallet(self, wallet_id: str) -> WalletInfo:
         """Get details of a specific wallet."""
         return self._wallet_service.get_wallet(wallet_id)
 
+    async def list_transactions(
+        self, wallet_id: str | None = None, blockchain: Network | str | None = None
+    ) -> list[TransactionInfo]:
+        """
+        List transactions for a wallet or globally.
+
+        Args:
+            wallet_id: Filter by wallet ID
+            blockchain: Filter by blockchain
+
+        Returns:
+            List of transactions
+        """
+        return self._wallet_service.list_transactions(wallet_id, blockchain)
+
     # ==================== Payment Operations ====================
-    
+
     async def pay(
         self,
         wallet_id: str,
@@ -298,16 +319,16 @@ class OmniAgentPay:
         """
         if not wallet_id:
             raise ValidationError("wallet_id is required")
-        
+
         amount_decimal = Decimal(str(amount))
         if amount_decimal <= 0:
             raise ValidationError(f"Payment amount must be positive. Got: {amount_decimal}")
-        
+
         idempotency_key = idempotency_key or str(uuid.uuid4())
-        
+
         meta = metadata or {}
         meta["idempotency_key"] = idempotency_key
-        
+
         context = PaymentContext(
             wallet_id=wallet_id,
             wallet_set_id=wallet_set_id,
@@ -316,7 +337,7 @@ class OmniAgentPay:
             purpose=purpose,
             metadata=meta,
         )
-        
+
         ledger_entry = LedgerEntry(
             wallet_id=wallet_id,
             recipient=recipient,
@@ -332,8 +353,7 @@ class OmniAgentPay:
 
         if not skip_guards:
             guards_chain = await self._guard_manager.get_guard_chain(
-                wallet_id=wallet_id, 
-                wallet_set_id=wallet_set_id
+                wallet_id=wallet_id, wallet_set_id=wallet_set_id
             )
             try:
                 reservation_tokens = await guards_chain.reserve(context)
@@ -344,7 +364,7 @@ class OmniAgentPay:
                     LedgerEntryStatus.BLOCKED,
                     tx_hash=None,
                 )
-                
+
                 return PaymentResult(
                     success=False,
                     transaction_id=None,
@@ -357,7 +377,7 @@ class OmniAgentPay:
                     guards_passed=guards_passed,
                     metadata={"guard_reason": str(e)},
                 )
-                
+
         try:
             result = await self._router.pay(
                 wallet_id=wallet_id,
@@ -372,15 +392,17 @@ class OmniAgentPay:
                 timeout_seconds=timeout_seconds,
                 **kwargs,
             )
-            
+
             if result.success:
                 await self._ledger.update_status(
                     ledger_entry.id,
-                    LedgerEntryStatus.COMPLETED if result.status == PaymentStatus.COMPLETED else LedgerEntryStatus.PENDING,
+                    LedgerEntryStatus.COMPLETED
+                    if result.status == PaymentStatus.COMPLETED
+                    else LedgerEntryStatus.PENDING,
                     result.blockchain_tx,
-                    metadata_updates={"transaction_id": result.transaction_id}
+                    metadata_updates={"transaction_id": result.transaction_id},
                 )
-                
+
                 if guards_chain:
                     await guards_chain.commit(reservation_tokens)
             else:
@@ -390,13 +412,13 @@ class OmniAgentPay:
                 )
                 if guards_chain:
                     await guards_chain.release(reservation_tokens)
-            
+
             return result
 
         except Exception:
             if guards_chain:
                 await guards_chain.release(reservation_tokens)
-            
+
             await self._ledger.update_status(
                 ledger_entry.id,
                 LedgerEntryStatus.FAILED,
@@ -413,19 +435,19 @@ class OmniAgentPay:
     ) -> SimulationResult:
         """
         Simulate a payment without executing.
-        
+
         Checks:
         - Guards would pass
         - Balance is sufficient
         - Recipient is valid
-        
+
         Args:
             wallet_id: Source wallet ID (REQUIRED)
             recipient: Payment recipient
             amount: Amount to simulate
             wallet_set_id: Optional wallet set ID (for set-level guards)
             **kwargs: Additional parameters
-            
+
         Returns:
             SimulationResult with would_succeed and details
         """
@@ -435,9 +457,9 @@ class OmniAgentPay:
                 route=PaymentMethod.TRANSFER,
                 reason="wallet_id is required",
             )
-        
+
         amount_decimal = Decimal(str(amount))
-        
+
         # Check guards first
         context = PaymentContext(
             wallet_id=wallet_id,
@@ -446,7 +468,7 @@ class OmniAgentPay:
             amount=amount_decimal,
             purpose="Simulation",
         )
-        
+
         allowed, reason, _ = await self._guard_manager.check(context)
         if not allowed:
             return SimulationResult(
@@ -454,7 +476,7 @@ class OmniAgentPay:
                 route=PaymentMethod.TRANSFER,
                 reason=f"Would be blocked by guard: {reason}",
             )
-        
+
         # Check via router
         return await self._router.simulate(
             wallet_id=wallet_id,
@@ -466,30 +488,29 @@ class OmniAgentPay:
     def can_pay(self, recipient: str) -> bool:
         """
         Check if a recipient can be paid.
-        
+
         Args:
             recipient: Payment recipient
-        
+
         Returns:
             True if an adapter can handle this recipient
         """
         return self._router.can_handle(recipient)
-    
+
     def detect_method(self, recipient: str) -> PaymentMethod | None:
         """
         Detect which payment method would be used for a recipient.
-        
+
         Args:
             recipient: Payment recipient
-            
+
         Returns:
             Payment method or None
         """
         return self._router.detect_method(recipient)
 
-    
     # ==================== Payment Intents ====================
-    
+
     @property
     def intents(self) -> PaymentIntentService:
         """Get intent management service."""
@@ -506,9 +527,9 @@ class OmniAgentPay:
     ) -> PaymentIntent:
         """
         Create a Payment Intent (Authorize).
-        
+
         Validates routing and guards but does not execute payment.
-        
+
         Args:
             wallet_id: Source wallet ID
             recipient: Payment recipient
@@ -516,94 +537,90 @@ class OmniAgentPay:
             purpose: Human-readable purpose
             idempotency_key: Idempotency key
             **kwargs: Additional context
-            
+
         Returns:
             Created PaymentIntent
-            
+
         Raises:
             PaymentError: If authorization logic (guards/simulation) fails
         """
         # 1. Simulate check (Routing + Guards) strictly
         # We force strict checking to ensure it WOULD succeed
         sim_result = await self.simulate(
-            wallet_id=wallet_id,
-            recipient=recipient,
-            amount=amount,
-            **kwargs
+            wallet_id=wallet_id, recipient=recipient, amount=amount, **kwargs
         )
-        
+
         if not sim_result.would_succeed:
-           raise PaymentError(f"Authorization failed: {sim_result.reason}")
+            raise PaymentError(f"Authorization failed: {sim_result.reason}")
 
         # 2. Create Intent
         metadata = kwargs.copy()
-        metadata.update({
-            "purpose": purpose,
-            "idempotency_key": idempotency_key,
-            "simulated_route": sim_result.route.value,
-        })
-        
+        metadata.update(
+            {
+                "purpose": purpose,
+                "idempotency_key": idempotency_key,
+                "simulated_route": sim_result.route.value,
+            }
+        )
+
         intent = await self._intent_service.create(
-            wallet_id=wallet_id,
-            recipient=recipient,
-            amount=Decimal(str(amount)),
-            metadata=metadata
+            wallet_id=wallet_id, recipient=recipient, amount=Decimal(str(amount)), metadata=metadata
         )
         return intent
 
     async def confirm_payment_intent(self, intent_id: str) -> PaymentResult:
         """
         Confirm and execute a Payment Intent (Capture).
-        
+
         Args:
             intent_id: ID of intent to confirm
-            
+
         Returns:
             PaymentResult
-            
+
         Raises:
             ValidationError: If intent invalid or already processed
         """
         intent = await self._intent_service.get(intent_id)
         if not intent:
             raise ValidationError(f"Intent not found: {intent_id}")
-        
+
         if intent.status != PaymentIntentStatus.REQUIRES_CONFIRMATION:
             raise ValidationError(f"Intent cannot be confirmed. Status: {intent.status}")
 
         try:
-             # Update to Processing
-             await self._intent_service.update_status(intent.id, PaymentIntentStatus.PROCESSING)
-             
-             # Prepare exec args from intent + metadata
-             exec_kwargs = intent.metadata.copy()
-             
-             # Remove internal metadata keys that aren't for routing
-             purpose = exec_kwargs.pop("purpose", None)
-             idempotency_key = exec_kwargs.pop("idempotency_key", None)
-             exec_kwargs.pop("simulated_route", None)
-             
-             # Execute Pay
-             result = await self.pay(
-                 wallet_id=intent.wallet_id,
-                 recipient=intent.recipient,
-                 amount=intent.amount,
-                 purpose=purpose,
-                 idempotency_key=idempotency_key,
-                 **exec_kwargs
-             )
-             
-             if result.success:
-                 await self._intent_service.update_status(intent.id, PaymentIntentStatus.SUCCEEDED)
-             else:
-                 await self._intent_service.update_status(intent.id, PaymentIntentStatus.FAILED)
-                 
-             return result
-             
+            # Update to Processing
+            await self._intent_service.update_status(intent.id, PaymentIntentStatus.PROCESSING)
+
+            # Prepare exec args from intent + metadata
+            exec_kwargs = intent.metadata.copy()
+
+            # Remove internal metadata keys that aren't for routing
+            purpose = exec_kwargs.pop("purpose", None)
+            idempotency_key = exec_kwargs.pop("idempotency_key", None)
+            exec_kwargs.pop("simulated_route", None)
+
+            # Execute Pay
+            result = await self.pay(
+                wallet_id=intent.wallet_id,
+                recipient=intent.recipient,
+                amount=intent.amount,
+                purpose=purpose,
+                idempotency_key=idempotency_key,
+                **exec_kwargs,
+            )
+
+            if result.success:
+                await self._intent_service.update_status(intent.id, PaymentIntentStatus.SUCCEEDED)
+            else:
+                await self._intent_service.update_status(intent.id, PaymentIntentStatus.FAILED)
+
+            return result
+
         except Exception as e:
-             # Mark failed on exception
-             await self._intent_service.update_status(intent.id, PaymentIntentStatus.FAILED)
-             raise e
+            # Mark failed on exception
+            await self._intent_service.update_status(intent.id, PaymentIntentStatus.FAILED)
+            raise e
 
     async def get_payment_intent(self, intent_id: str) -> PaymentIntent | None:
         """Get Payment Intent by ID."""
@@ -614,25 +631,22 @@ class OmniAgentPay:
         intent = await self._intent_service.get(intent_id)
         if not intent:
             raise ValidationError(f"Intent not found: {intent_id}")
-            
+
         if intent.status not in (PaymentIntentStatus.REQUIRES_CONFIRMATION,):
-             raise ValidationError(f"Cannot cancel intent in status: {intent.status}")
-             
+            raise ValidationError(f"Cannot cancel intent in status: {intent.status}")
 
         return await self._intent_service.update_status(intent.id, PaymentIntentStatus.CANCELED)
 
     async def batch_pay(
-        self,
-        requests: list[PaymentRequest],
-        concurrency: int = 5
+        self, requests: list[PaymentRequest], concurrency: int = 5
     ) -> BatchPaymentResult:
         """
         Execute multiple payments in batch.
-        
+
         Args:
             requests: List of payment requests to execute
             concurrency: Maximum number of concurrent executions (default 5)
-            
+
         Returns:
             BatchPaymentResult containing status of all payments
         """
@@ -641,72 +655,74 @@ class OmniAgentPay:
     async def sync_transaction(self, entry_id: str) -> LedgerEntry:
         """
         Synchronize a ledger entry with the provider status.
-        
+
         Args:
             entry_id: Ledger entry ID
-            
+
         Returns:
             Updated LedgerEntry
-            
+
         Raises:
             ValidationError: If entry not found or no transaction ID
         """
         entry = await self._ledger.get(entry_id)
         if not entry:
             raise ValidationError(f"Ledger entry not found: {entry_id}")
-            
+
         tx_id = entry.metadata.get("transaction_id")
         if not tx_id:
             # If no transaction ID, we can't sync with provider
             # This happens if pay() failed before getting an ID
             raise ValidationError("Ledger entry has no transaction ID to sync")
-            
+
         # Call Provider (Blocking call)
         try:
             tx_info = self._circle_client.get_transaction(tx_id)
         except Exception as e:
-            raise PaymentError(f"Failed to fetch transaction from provider: {e}")
-            
+            raise PaymentError(f"Failed to fetch transaction from provider: {e}") from e
+
         # Map status
-        new_status = entry.status # Default to current
+        new_status = entry.status  # Default to current
         if tx_info.state == "COMPLETE":
-             new_status = LedgerEntryStatus.COMPLETED
+            new_status = LedgerEntryStatus.COMPLETED
         elif tx_info.state == "FAILED":
-             new_status = LedgerEntryStatus.FAILED
+            new_status = LedgerEntryStatus.FAILED
         elif tx_info.state == "CANCELLED":
-             new_status = LedgerEntryStatus.CANCELLED
-        
+            new_status = LedgerEntryStatus.CANCELLED
+
         # Update Ledger
         await self._ledger.update_status(
-             entry.id,
-             new_status,
-             tx_hash=tx_info.tx_hash,
-             metadata_updates={
-                 "last_synced": datetime.utcnow().isoformat(),
-                 "provider_state": tx_info.state.value if hasattr(tx_info.state, 'value') else str(tx_info.state),
-                 "fee_level": tx_info.fee_level.value if tx_info.fee_level else None
-             }
+            entry.id,
+            new_status,
+            tx_hash=tx_info.tx_hash,
+            metadata_updates={
+                "last_synced": datetime.utcnow().isoformat(),
+                "provider_state": tx_info.state.value
+                if hasattr(tx_info.state, "value")
+                else str(tx_info.state),
+                "fee_level": tx_info.fee_level.value if tx_info.fee_level else None,
+            },
         )
-        
+
         # Reload and return
         updated = await self._ledger.get(entry.id)
-        return updated # type: ignore
+        return updated  # type: ignore
 
     # ==================== Guard Helpers ====================
 
     async def add_budget_guard(
-        self, 
-        wallet_id: str, 
+        self,
+        wallet_id: str,
         daily_limit: str | Decimal | None = None,
         hourly_limit: str | Decimal | None = None,
         total_limit: str | Decimal | None = None,
-        name: str = "budget"
+        name: str = "budget",
     ) -> None:
         """
         Add a budget guard to a wallet.
-        
+
         Enforce spending limits over time periods (Atomic & Reliable).
-        
+
         Args:
             wallet_id: Target wallet ID
             daily_limit: Max spend per 24h
@@ -715,30 +731,27 @@ class OmniAgentPay:
             name: Custom name for the guard
         """
         from omniagentpay.guards.budget import BudgetGuard
-        
+
         d_limit = Decimal(str(daily_limit)) if daily_limit else None
         h_limit = Decimal(str(hourly_limit)) if hourly_limit else None
         t_limit = Decimal(str(total_limit)) if total_limit else None
-        
+
         guard = BudgetGuard(
-            daily_limit=d_limit,
-            hourly_limit=h_limit,
-            total_limit=t_limit,
-            name=name
+            daily_limit=d_limit, hourly_limit=h_limit, total_limit=t_limit, name=name
         )
         await self._guard_manager.add_guard(wallet_id, guard)
 
     async def add_budget_guard_for_set(
-        self, 
-        wallet_set_id: str, 
+        self,
+        wallet_set_id: str,
         daily_limit: str | Decimal | None = None,
         hourly_limit: str | Decimal | None = None,
         total_limit: str | Decimal | None = None,
-        name: str = "budget"
+        name: str = "budget",
     ) -> None:
         """
         Add a budget guard to a wallet set (applies to ALL wallets in the set).
-        
+
         Args:
             wallet_set_id: Target wallet set ID
             daily_limit: Max spend per 24h
@@ -747,28 +760,26 @@ class OmniAgentPay:
             name: Custom name for the guard
         """
         from omniagentpay.guards.budget import BudgetGuard
-        
+
         d_limit = Decimal(str(daily_limit)) if daily_limit else None
         h_limit = Decimal(str(hourly_limit)) if hourly_limit else None
         t_limit = Decimal(str(total_limit)) if total_limit else None
-        
+
         guard = BudgetGuard(
-            daily_limit=d_limit,
-            hourly_limit=h_limit,
-            total_limit=t_limit,
-            name=name
+            daily_limit=d_limit, hourly_limit=h_limit, total_limit=t_limit, name=name
         )
         await self._guard_manager.add_guard_for_set(wallet_set_id, guard)
+
     async def add_single_tx_guard(
         self,
         wallet_id: str,
         max_amount: str | Decimal,
         min_amount: str | Decimal | None = None,
-        name: str = "single_tx"
+        name: str = "single_tx",
     ) -> None:
         """
         Add a Single Transaction Limit guard.
-        
+
         Args:
             wallet_id: Target wallet ID
             max_amount: Max amount per transaction
@@ -776,11 +787,11 @@ class OmniAgentPay:
             name: Guard name
         """
         from omniagentpay.guards.single_tx import SingleTxGuard
-        
+
         guard = SingleTxGuard(
             max_amount=Decimal(str(max_amount)),
             min_amount=Decimal(str(min_amount)) if min_amount else None,
-            name=name
+            name=name,
         )
         await self._guard_manager.add_guard(wallet_id, guard)
 
@@ -791,11 +802,11 @@ class OmniAgentPay:
         addresses: list[str] | None = None,
         patterns: list[str] | None = None,
         domains: list[str] | None = None,
-        name: str = "recipient"
+        name: str = "recipient",
     ) -> None:
         """
         Add a Recipient Access Control guard.
-        
+
         Args:
             wallet_id: Target wallet ID
             mode: 'whitelist' (allow specific) or 'blacklist' (block specific)
@@ -805,13 +816,9 @@ class OmniAgentPay:
             name: Guard name
         """
         from omniagentpay.guards.recipient import RecipientGuard
-        
+
         guard = RecipientGuard(
-            mode=mode,
-            addresses=addresses,
-            patterns=patterns,
-            domains=domains,
-            name=name
+            mode=mode, addresses=addresses, patterns=patterns, domains=domains, name=name
         )
         await self._guard_manager.add_guard(wallet_id, guard)
 
@@ -821,13 +828,13 @@ class OmniAgentPay:
         max_per_minute: int | None = None,
         max_per_hour: int | None = None,
         max_per_day: int | None = None,
-        name: str = "rate_limit"
+        name: str = "rate_limit",
     ) -> None:
         """
         Add a rate limit guard to a wallet.
-        
+
         Limit number of transactions per time window.
-        
+
         Args:
             wallet_id: Target wallet ID
             max_per_minute: Max txs per minute
@@ -836,14 +843,63 @@ class OmniAgentPay:
             name: Custom name for the guard
         """
         from omniagentpay.guards.rate_limit import RateLimitGuard
-        
+
         guard = RateLimitGuard(
             max_per_minute=max_per_minute,
             max_per_hour=max_per_hour,
             max_per_day=max_per_day,
-            name=name
+            name=name,
         )
         await self._guard_manager.add_guard(wallet_id, guard)
+
+    async def add_confirm_guard(
+        self,
+        wallet_id: str,
+        threshold: str | Decimal | None = None,
+        always_confirm: bool = False,
+        name: str = "confirm",
+    ) -> None:
+        """
+        Add a confirmation guard to a wallet (Human-in-the-Loop).
+
+        Payments above the threshold require explicit confirmation via callback
+        or external handling (e.g., webhook approval).
+
+        Args:
+            wallet_id: Target wallet ID
+            threshold: Amount above which confirmation is required
+            always_confirm: If True, require confirmation for ALL payments
+            name: Custom name for the guard
+        """
+        from omniagentpay.guards.confirm import ConfirmGuard
+
+        t_threshold = Decimal(str(threshold)) if threshold else None
+
+        guard = ConfirmGuard(threshold=t_threshold, always_confirm=always_confirm, name=name)
+        await self._guard_manager.add_guard(wallet_id, guard)
+
+    async def add_confirm_guard_for_set(
+        self,
+        wallet_set_id: str,
+        threshold: str | Decimal | None = None,
+        always_confirm: bool = False,
+        name: str = "confirm",
+    ) -> None:
+        """
+        Add a confirmation guard to a wallet set (applies to ALL wallets in the set).
+
+        Args:
+            wallet_set_id: Target wallet set ID
+            threshold: Amount above which confirmation is required
+            always_confirm: If True, require confirmation for ALL payments
+            name: Custom name for the guard
+        """
+        from omniagentpay.guards.confirm import ConfirmGuard
+
+        t_threshold = Decimal(str(threshold)) if threshold else None
+
+        guard = ConfirmGuard(threshold=t_threshold, always_confirm=always_confirm, name=name)
+        await self._guard_manager.add_guard_for_set(wallet_set_id, guard)
 
     async def add_rate_limit_guard_for_set(
         self,
@@ -851,11 +907,11 @@ class OmniAgentPay:
         max_per_minute: int | None = None,
         max_per_hour: int | None = None,
         max_per_day: int | None = None,
-        name: str = "rate_limit"
+        name: str = "rate_limit",
     ) -> None:
         """
         Add a rate limit guard to a wallet set (applies to ALL wallets in the set).
-        
+
         Args:
             wallet_set_id: Target wallet set ID
             max_per_minute: Max txs per minute
@@ -864,12 +920,12 @@ class OmniAgentPay:
             name: Custom name for the guard
         """
         from omniagentpay.guards.rate_limit import RateLimitGuard
-        
+
         guard = RateLimitGuard(
             max_per_minute=max_per_minute,
             max_per_hour=max_per_hour,
             max_per_day=max_per_day,
-            name=name
+            name=name,
         )
         await self._guard_manager.add_guard_for_set(wallet_set_id, guard)
 
@@ -880,11 +936,11 @@ class OmniAgentPay:
         addresses: list[str] | None = None,
         patterns: list[str] | None = None,
         domains: list[str] | None = None,
-        name: str = "recipient"
+        name: str = "recipient",
     ) -> None:
         """
         Add a Recipient Access Control guard to a wallet set.
-        
+
         Args:
             wallet_set_id: Target wallet set ID
             mode: 'whitelist' (allow specific) or 'blacklist' (block specific)
@@ -894,23 +950,19 @@ class OmniAgentPay:
             name: Guard name
         """
         from omniagentpay.guards.recipient import RecipientGuard
-        
+
         guard = RecipientGuard(
-            mode=mode,
-            addresses=addresses,
-            patterns=patterns,
-            domains=domains,
-            name=name
+            mode=mode, addresses=addresses, patterns=patterns, domains=domains, name=name
         )
         await self._guard_manager.add_guard_for_set(wallet_set_id, guard)
 
     async def list_guards(self, wallet_id: str) -> list[str]:
         """
         List all guard names registered for a wallet.
-        
+
         Args:
             wallet_id: Target wallet ID
-            
+
         Returns:
             List of guard names
         """
@@ -919,12 +971,11 @@ class OmniAgentPay:
     async def list_guards_for_set(self, wallet_set_id: str) -> list[str]:
         """
         List all guard names registered for a wallet set.
-        
+
         Args:
             wallet_set_id: Target wallet set ID
-            
+
         Returns:
             List of guard names
         """
         return await self._guard_manager.list_wallet_set_guard_names(wallet_set_id)
-

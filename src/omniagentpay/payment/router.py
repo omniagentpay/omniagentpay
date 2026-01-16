@@ -9,16 +9,15 @@ from __future__ import annotations
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
-from omniagentpay.core.exceptions import PaymentError
 from omniagentpay.core.logging import get_logger
-from omniagentpay.protocols.base import ProtocolAdapter
 from omniagentpay.core.types import (
+    Network,
     PaymentMethod,
     PaymentResult,
     PaymentStatus,
     SimulationResult,
-    Network,
 )
+from omniagentpay.protocols.base import ProtocolAdapter
 
 if TYPE_CHECKING:
     from omniagentpay.core.config import Config
@@ -27,39 +26,39 @@ if TYPE_CHECKING:
 
 class PaymentRouter:
     """Routes payments to the appropriate protocol adapter based on recipient type."""
-    
+
     def __init__(
         self,
-        config: "Config",
-        wallet_service: "WalletService",
+        config: Config,
+        wallet_service: WalletService,
     ) -> None:
         self._config = config
         self._wallet_service = wallet_service
         self._adapters: list[ProtocolAdapter] = []
         self._logger = get_logger("router")
-    
+
     def register_adapter(self, adapter: ProtocolAdapter) -> None:
         self._adapters.append(adapter)
         self._adapters.sort(key=lambda a: a.get_priority())
-    
+
     def unregister_adapter(self, method: PaymentMethod) -> None:
         self._adapters = [a for a in self._adapters if a.method != method]
-    
+
     def get_adapters(self) -> list[ProtocolAdapter]:
         return list(self._adapters)
-    
+
     def detect_method(self, recipient: str, **kwargs: Any) -> PaymentMethod | None:
         for adapter in self._adapters:
             if adapter.supports(recipient, **kwargs):
                 return adapter.method
         return None
-    
+
     def _find_adapter(self, recipient: str, **kwargs: Any) -> ProtocolAdapter | None:
         for adapter in self._adapters:
             if adapter.supports(recipient, **kwargs):
                 return adapter
         return None
-    
+
     async def pay(
         self,
         wallet_id: str,
@@ -75,14 +74,14 @@ class PaymentRouter:
     ) -> PaymentResult:
         """Execute a payment via the appropriate method."""
         amount_decimal = Decimal(str(amount))
-        
+
         # Resolve source network from wallet if possible
         try:
             wallet = self._wallet_service.get_wallet(wallet_id)
             kwargs["source_network"] = Network.from_string(wallet.blockchain)
         except Exception:
             pass
-        
+
         adapter = self._find_adapter(recipient, destination_chain=destination_chain, **kwargs)
         if not adapter:
             self._logger.error(f"No adapter found for recipient: {recipient}")
@@ -97,7 +96,7 @@ class PaymentRouter:
                 error=f"No adapter found for recipient: {recipient}",
                 guards_passed=guards_passed or [],
             )
-        
+
         result = await adapter.execute(
             wallet_id=wallet_id,
             recipient=recipient,
@@ -109,12 +108,12 @@ class PaymentRouter:
             timeout_seconds=timeout_seconds,
             **kwargs,
         )
-        
+
         if guards_passed:
             result.guards_passed = guards_passed
-        
+
         return result
-    
+
     async def simulate(
         self,
         wallet_id: str,
@@ -124,34 +123,34 @@ class PaymentRouter:
     ) -> SimulationResult:
         """
         Simulate a payment without executing.
-        
+
         Args:
             wallet_id: Source wallet ID
             recipient: Payment recipient
             amount: Amount to simulate
-            
+
         Returns:
             Simulation result
         """
         amount_decimal = Decimal(str(amount))
-        
+
         # Resolve source network
         try:
             wallet = self._wallet_service.get_wallet(wallet_id)
             kwargs["source_network"] = Network.from_string(wallet.blockchain)
         except Exception:
             pass
-        
+
         # Find adapter
         adapter = self._find_adapter(recipient, **kwargs)
-        
+
         if not adapter:
             return SimulationResult(
                 would_succeed=False,
                 route=PaymentMethod.TRANSFER,
                 reason=f"No adapter found for recipient: {recipient}",
             )
-        
+
         # Simulate via adapter
         sim_result = await adapter.simulate(
             wallet_id=wallet_id,
@@ -159,30 +158,32 @@ class PaymentRouter:
             amount=amount_decimal,
             **kwargs,
         )
-        
+
         return SimulationResult(
             would_succeed=sim_result.get("would_succeed", False),
             route=adapter.method,
-            estimated_fee=Decimal(sim_result["estimated_fee"]) if sim_result.get("estimated_fee") else None,
+            estimated_fee=Decimal(sim_result["estimated_fee"])
+            if sim_result.get("estimated_fee")
+            else None,
             reason=sim_result.get("reason"),
         )
-    
+
     def can_handle(self, recipient: str) -> bool:
         """
         Check if any adapter can handle the recipient.
-        
+
         Args:
             recipient: Payment recipient
-            
+
         Returns:
             True if an adapter exists for this recipient
         """
         return self._find_adapter(recipient) is not None
-    
+
     def get_supported_formats(self) -> dict[PaymentMethod, str]:
         """
         Get descriptions of supported recipient formats.
-        
+
         Returns:
             Dict mapping methods to format descriptions
         """

@@ -1,64 +1,85 @@
-# OmniAgentPay: The Payment Infrastructure for AI Agents
+# OmniAgentPay: Plug-and-Play Payment Infrastructure for AI Agents
 
 [![PyPI version](https://badge.fury.io/py/omniagentpay.svg)](https://badge.fury.io/py/omniagentpay)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-**OmniAgentPay** is the payment infrastructure layer built specifically for **Autonomous AI Agents**. It abstracts blockchain complexity into a unified interface while enforcing strict safety boundaries through a programmable Safety Kernel.
+> **You've built an AI agent. Now it needs to pay for things.**
+> 
+> Add your Circle API key. Connect OmniAgentPay. Your agent has everything it needs to handle payments—safely, instantly, across any chain.
 
-Traditional blockchain SDKs are designed for humans with screens, private keys, and confirmation buttons. **OmniAgentPay** is designed for code that thinks, reasons, and executes transactions autonomously.
+**OmniAgentPay** is the payment infrastructure layer that gives any AI agent the ability to:
+- 💳 **Pay addresses** directly (USDC transfers)
+- 🌐 **Pay APIs** that require payment (HTTP 402 / x402 protocol)
+- 🌉 **Pay cross-chain** seamlessly (Circle CCTP)
+- 🛡️ **Stay safe** with programmable spending limits (Guards)
+
+**Zero blockchain complexity. Zero private key management. One `pay()` call.**
+
+```python
+# Give any AI agent payment superpowers in 3 lines:
+from omniagentpay import OmniAgentPay
+
+client = OmniAgentPay()  # Reads CIRCLE_API_KEY from env
+result = await client.pay(wallet_id="...", recipient="0x...", amount=10.00)
+```
+
+---
+
+## 🎯 The OmniAgentPay Story
+
+### The Problem
+Traditional blockchain SDKs are designed for humans with screens, private keys, and confirmation buttons. When you give an AI agent a private key, you create a risk vector—hallucinations, prompt injection, or logic bugs can drain a treasury in seconds.
+
+### The Solution  
+OmniAgentPay is **designed for code that thinks, reasons, and executes transactions autonomously**. We wrap every wallet in a **Safety Kernel** that:
+
+1. **Guards** check every payment against strict policies (Budget, Velocity, Whitelists)
+2. **Simulation** predicts the outcome and fees before signing
+3. **Routing** automatically selects the optimal path (Transfer, x402, or Cross-Chain)
+
+### What This Means For You
+
+| You Want To... | OmniAgentPay Does... |
+|:---------------|:---------------------|
+| Send USDC to an address | `pay()` → Transfer Adapter handles it |
+| Pay an API that returns 402 | `pay()` → x402 Adapter negotiates, pays, retries |
+| Move funds to another chain | `pay()` → Gateway Adapter uses CCTP automatically |
+| Prevent overspending | Guards enforce limits atomically |
+| Require human approval | ConfirmGuard pauses payments for review |
+
+**One method. Any payment type. All safety built-in.**
+
+---
+
+## ⚡ Key Features
+
+*   **Zero Config**: Just provide your Circle API key. Entity Secrets, encryption, and credentials are managed automatically.
+*   **Agent-Native**: Simple `client.pay()` interface that "just works". No ABIs, gas limits, or nonces.
+*   **Safety Kernel**: Guards prevent runaway spending with atomic guarantees—even under concurrent load.
+*   **Unified Routing**: One method transparently handles USDC transfers, x402 API payments, and cross-chain transfers.
+*   **Payment Intents**: Authorize-then-Capture workflows for multi-agent coordination or DAO approval.
+*   **Full Observability**: Built-in ledger, DEBUG logging, and webhook support.
 
 ---
 
 ## 📚 Table of Contents
 
-1.  [**Why OmniAgentPay?**](#-why-omniagentpay)
-2.  [**Core Architecture**](#-core-architecture)
-3.  [**Installation**](#-installation)
-4.  [**Quick Start**](#-quick-start)
-5.  [**Configuration Reference**](#-configuration-reference)
-6.  [**Wallet Management**](#-wallet-management)
-    *   [Agent Wallets](#agent-wallets)
-    *   [User Wallets](#user-wallets)
-    *   [Wallet Sets](#wallet-sets)
-7.  [**The Payment API**](#-the-payment-api)
-    *   [Understanding `pay()`](#understanding-pay)
-    *   [Automatic Routing](#automatic-routing)
-    *   [Cross-Chain Payments](#cross-chain-payments)
-    *   [Simulation](#simulation)
-8.  [**The Guard System (Safety Kernel)**](#-the-guard-system-safety-kernel)
-    *   [Budget Guard](#budget-guard)
-    *   [Rate Limit Guard](#rate-limit-guard)
-    *   [Single Transaction Guard](#single-transaction-guard)
-    *   [Recipient Guard](#recipient-guard)
-    *   [Confirm Guard (Human-in-the-Loop)](#confirm-guard)
-    *   [Atomic Guarantees](#atomic-guarantees)
-9.  [**Payment Intents (Auth/Capture)**](#-payment-intents-authcapture)
-10. [**Batch Payments**](#-batch-payments)
-11. [**Webhooks & Events**](#-webhooks--events)
-12. [**Observability & Ledger**](#-observability--ledger)
-13. [**Security & Best Practices**](#-security--best-practices)
-14. [**Error Handling**](#-error-handling)
-15. [**Contributing**](#-contributing)
-
----
-
-## 🚀 Why OmniAgentPay?
-
-### The Problem: AI Agents + Crypto = Risk
-When you give an AI agent a private key, you create a risk vector. Hallucinations, prompt injection, or logic bugs can drain a treasury in seconds.
-
-### The Solution: Programmable Safety
-OmniAgentPay wraps the wallet in a **Safety Kernel**. Before any transaction is signed:
-1.  **Guards** check the request against strict policies (Budget, Velocity, Whitelists).
-2.  **Simulation** predicts the outcome and fees.
-3.  **Routing** selects the optimal path (Transfer, x402, CCTP).
-
-### Key Features
-*   **Zero Config**: Just provide your Circle API key. We handle Entity Secrets, Encryption, and stored credentials managed automatically.
-*   **Agent-Native**: Simple `client.pay()` interface that "just works". No dealing with ABIs, gas limits, or nonces.
-*   **Safety First**: Embedded Guard System prevents runaway spending with atomic guarantees.
-*   **Unified Routing**: One method handles USDC transfers, x402 invoices, and Cross-Chain payments transparently.
-*   **Payment Intents**: Support for "Authorize-then-Capture" workflows, essential for multi-agent coordination or DAO approval steps.
+1.  [**What Can You Build?**](#-what-can-you-build)
+2.  [**The Three Payment Protocols**](#-the-three-payment-protocols)
+3.  [**Core Architecture**](#-core-architecture)
+4.  [**Installation**](#-installation)
+5.  [**Quick Start**](#-quick-start)
+6.  [**Configuration Reference**](#-configuration-reference)
+7.  [**Wallet Management**](#-wallet-management)
+8.  [**The Payment API**](#-the-payment-api)
+9.  [**The Guard System (Safety Kernel)**](#-the-guard-system-safety-kernel)
+10. [**Payment Intents (Auth/Capture)**](#-payment-intents-authcapture)
+11. [**Batch Payments**](#-batch-payments)
+12. [**Webhooks & Events**](#-webhooks--events)
+13. [**Observability & Ledger**](#-observability--ledger)
+14. [**Security & Best Practices**](#-security--best-practices)
+15. [**Error Handling**](#-error-handling)
+16. [**Contributing**](#-contributing)
 
 ---
 
@@ -89,6 +110,64 @@ Agents that move capital instantly between chains.
 *   **Example**: A Liquidity Agent that rebalances USDC from Ethereum to Base when yields change.
 
 ---
+
+## 🔌 The Three Payment Protocols
+
+OmniAgentPay automatically routes payments through the right protocol. You just call `pay()`—we handle the rest.
+
+### 1. Transfer Adapter — Direct USDC Transfers
+**When**: Recipient is a blockchain address (`0x...` or Solana format)
+
+```python
+# Agent pays a vendor directly
+result = await client.pay(
+    wallet_id=wallet.id,
+    recipient="0x742d35Cc6634C0532925a3b844Bc9e7595f5e4a0",
+    amount="25.00"
+)
+```
+
+*Uses Circle's Developer-Controlled Wallets for secure, gasless transfers.*
+
+### 2. x402 Adapter — Pay-Per-Use APIs
+**When**: Recipient is an HTTP URL (`https://...`)
+
+The [x402 protocol](https://x402.org) enables "HTTP 402 Payment Required" flows. Your agent can pay for API access automatically.
+
+```python
+# Agent pays for premium API access
+result = await client.pay(
+    wallet_id=wallet.id,
+    recipient="https://api.premium-data.com/resource",
+    amount="0.10"  # Or let x402 negotiate the price
+)
+```
+
+**How it works:**
+1. Agent requests the URL
+2. Server returns `402 Payment Required` with price in headers
+3. OmniAgentPay pays the invoice automatically
+4. Agent retries with payment proof, gets the data
+
+*Perfect for LLM wrappers, data APIs, or any usage-based service.*
+
+### 3. Gateway Adapter — Cross-Chain Transfers
+**When**: `destination_chain` is specified (or recipient uses `chain:address` format)
+
+Uses Circle's CCTP (Cross-Chain Transfer Protocol) to move USDC between chains without bridges.
+
+```python
+# Agent moves funds from Arc to Base
+result = await client.pay(
+    wallet_id=wallet.id,
+    recipient="0xRecipientOnBase...",
+    amount="100.00",
+    destination_chain=Network.BASE
+)
+```
+
+**Supported Chains**: Ethereum, Base, Arbitrum, Optimism, Polygon, Avalanche, Solana, and more.
+
 
 ## 🏗 Core Architecture
 
@@ -218,10 +297,10 @@ OmniAgentPay can be configured via Environment Variables or direct Constructor A
 | :--- | :--- | :--- | :--- |
 | `CIRCLE_API_KEY` | **Yes** | Your API Key from Circle Console. | - |
 | `ENTITY_SECRET` | No | 32-byte hex secret for transaction signing. | **Auto-Generated** if missing |
-| `OMNIAGENT_STORAGE_BACKEND` | No | Persistence layer: `memory` or `redis`. | `memory` |
-| `REDIS_URL` | No | Connection string if `redis` backend is used. | `redis://localhost:6379/0` |
-| `OMNIAGENT_LOG_LEVEL` | No | `DEBUG`, `INFO`, `WARNING`, `ERROR`. | `INFO` |
-| `OMNIAGENT_ENV` | No | `production` or `development`. | `development` |
+| `OMNIAGENTPAY_STORAGE_BACKEND` | No | Persistence layer: `memory` or `redis`. | `memory` |
+| `OMNIAGENTPAY_REDIS_URL` | No | Connection string if `redis` backend is used. | `redis://localhost:6379/0` |
+| `OMNIAGENTPAY_LOG_LEVEL` | No | `DEBUG`, `INFO`, `WARNING`, `ERROR`. | `INFO` |
+| `OMNIAGENTPAY_ENV` | No | `production` or `development`. | `development` |
 
 ### Constructor Arguments (`OmniAgentPay`)
 
@@ -234,11 +313,63 @@ client = OmniAgentPay(
 )
 ```
 
+### Entity Secret Management
+
+The **Entity Secret** is a 32-byte private key required by Circle to sign wallet operations. OmniAgentPay handles this automatically, but understanding it helps with troubleshooting.
+
+#### How Auto-Setup Works
+
+When you initialize `OmniAgentPay` without an `ENTITY_SECRET`:
+
+1. SDK generates a new 32-byte secret
+2. Registers it with Circle API
+3. Saves a **recovery file** to `~/.config/omniagentpay/`
+4. Appends the secret to your `.env` file
+
+```python
+# First run - auto-generates and registers entity secret
+from omniagentpay import OmniAgentPay
+client = OmniAgentPay()  # Reads CIRCLE_API_KEY from .env, generates ENTITY_SECRET
+```
+
+#### Recovery File Location
+
+Recovery files are stored in a secure, platform-specific directory:
+
+| Platform | Location |
+|:---------|:---------|
+| Linux | `~/.config/omniagentpay/` |
+| macOS | `~/Library/Application Support/omniagentpay/` |
+| Windows | `%APPDATA%/omniagentpay/` |
+
+You can find your config directory programmatically:
+
+```python
+from omniagentpay import get_config_dir, find_recovery_file
+
+print(get_config_dir())       # ~/.config/omniagentpay
+print(find_recovery_file())   # Path to recovery file, or None
+```
+
+#### Troubleshooting: "Entity Secret Invalid"
+
+If you see this error, it means the `ENTITY_SECRET` in your `.env` doesn't match what's registered with Circle for your API key.
+
+**Cause**: You previously registered an entity secret, but lost access to it (missing from `.env` or deleted).
+
+**Solutions**:
+
+1. **If you have a recovery file**: Go to https://console.circle.com, navigate to Developer > Entity Secret, upload the recovery file to reset your secret.
+
+2. **If you don't have a recovery file**: Create a new API key at https://console.circle.com. Then remove `ENTITY_SECRET` from your `.env` and restart your app.
+
+For full details, see: [Circle Entity Secret Management](https://developers.circle.com/w3s/entity-secret-management)
+
 ---
 
-## 🔧 Wallet Management
+## Wallet Management
 
-OmniAgentPay abstracts the concept of "Wallet Sets" to help you organize agent swarms.
+OmniAgentPay organizes wallets into **Wallet Sets** to help you manage agent swarms and user wallets.
 
 ### Agent Wallets
 Best for autonomous agents. Creates a Wallet Set named `agent-{name}` and a wallet within it.

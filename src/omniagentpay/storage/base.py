@@ -13,11 +13,11 @@ from typing import Any
 class StorageBackend(ABC):
     """
     Abstract base class for storage backends.
-    
+
     Provides simple CRUD operations for storing/retrieving data.
     Implementations can use any persistence layer (memory, Redis, SQLite, etc.)
     """
-    
+
     @abstractmethod
     async def save(
         self,
@@ -27,14 +27,14 @@ class StorageBackend(ABC):
     ) -> None:
         """
         Save data to storage.
-        
+
         Args:
             collection: Collection/table name
             key: Unique key for the record
             data: Data to store (must be JSON-serializable)
         """
         ...
-    
+
     @abstractmethod
     async def get(
         self,
@@ -43,16 +43,16 @@ class StorageBackend(ABC):
     ) -> dict[str, Any] | None:
         """
         Get data from storage.
-        
+
         Args:
             collection: Collection/table name
             key: Record key
-            
+
         Returns:
             Data dict or None if not found
         """
         ...
-    
+
     @abstractmethod
     async def delete(
         self,
@@ -61,16 +61,16 @@ class StorageBackend(ABC):
     ) -> bool:
         """
         Delete data from storage.
-        
+
         Args:
             collection: Collection/table name
             key: Record key
-            
+
         Returns:
             True if deleted, False if not found
         """
         ...
-    
+
     @abstractmethod
     async def query(
         self,
@@ -81,18 +81,18 @@ class StorageBackend(ABC):
     ) -> list[dict[str, Any]]:
         """
         Query data with optional filters.
-        
+
         Args:
             collection: Collection/table name
             filters: Key-value pairs to filter by (exact match)
             limit: Maximum records to return
             offset: Number of records to skip
-            
+
         Returns:
             List of matching records
         """
         ...
-    
+
     @abstractmethod
     async def update(
         self,
@@ -102,17 +102,17 @@ class StorageBackend(ABC):
     ) -> bool:
         """
         Update existing data.
-        
+
         Args:
             collection: Collection/table name
             key: Record key
             data: Fields to update (merged with existing)
-            
+
         Returns:
             True if updated, False if not found
         """
         ...
-    
+
     @abstractmethod
     async def count(
         self,
@@ -121,29 +121,29 @@ class StorageBackend(ABC):
     ) -> int:
         """
         Count records in collection.
-        
+
         Args:
             collection: Collection/table name
             filters: Optional filters
-            
+
         Returns:
             Count of matching records
         """
         ...
-    
+
     @abstractmethod
     async def clear(self, collection: str) -> int:
         """
         Clear all records from a collection.
-        
+
         Args:
             collection: Collection/table name
-            
+
         Returns:
             Number of records deleted
         """
         ...
-    
+
     @abstractmethod
     async def atomic_add(
         self,
@@ -153,12 +153,12 @@ class StorageBackend(ABC):
     ) -> str:
         """
         Atomically add amount to a numeric value stored at key.
-        
+
         Args:
             collection: Collection/table name
             key: Record key
             amount: Amount to add (as decimal string)
-            
+
         Returns:
             New total value as string
         """
@@ -167,7 +167,7 @@ class StorageBackend(ABC):
     async def health_check(self) -> bool:
         """
         Check if storage is healthy and connected.
-        
+
         Returns:
             True if healthy
         """
