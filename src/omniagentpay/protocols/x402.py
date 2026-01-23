@@ -1,9 +1,4 @@
-"""
-X402Adapter - HTTP 402 Payment Required protocol support.
-
-Handles payments to URLs that return HTTP 402 status codes.
-Based on the x402 specification from Coinbase.
-"""
+"""X402Adapter - HTTP 402 Payment Required protocol support."""
 
 from __future__ import annotations
 
@@ -31,11 +26,10 @@ if TYPE_CHECKING:
     from omniagentpay.wallet.service import WalletService
 
 
-# x402 Header names (V2)
-HEADER_PAYMENT_SIGNATURE = "PAYMENT-SIGNATURE"
-HEADER_PAYMENT_RESPONSE = "PAYMENT-RESPONSE"
-# Legacy V1 Header (Fallback)
-HEADER_PAYMENT_REQUIRED_V1 = "X-Payment-Required"
+# Header names
+HEADER_PAYMENT_SIGNATURE = "PAYMENT-SIGNATURE"  # V2
+HEADER_PAYMENT_RESPONSE = "PAYMENT-RESPONSE"   # V2
+HEADER_PAYMENT_REQUIRED_V1 = "X-Payment-Required"  # V1 Legacy
 
 # URL pattern for detecting x402-compatible endpoints
 URL_PATTERN = re.compile(r"^https?://")
@@ -43,27 +37,22 @@ URL_PATTERN = re.compile(r"^https?://")
 
 @dataclass
 class PaymentRequirements:
-    """
-    Payment requirements from a 402 response.
+    """Payment requirements parsed from a 402 response."""
 
-    Parsed from the 402 Body (V2) or X-Payment-Required header (V1).
-    """
-
-    scheme: str  # "exact" for fixed amount
-    network: str  # "arc-testnet", "base", etc.
-    max_amount_required: str  # Amount in smallest unit
-    resource: str  # URL being accessed
-    description: str  # Human-readable description
-    recipient: str  # Payment recipient address
-    extra: dict[str, Any] | None = None  # Additional fields
+    scheme: str
+    network: str
+    max_amount_required: str  # Smallest unit
+    resource: str
+    description: str
+    recipient: str
+    extra: dict[str, Any] | None = None
 
     @classmethod
     def from_response(cls, response: httpx.Response) -> PaymentRequirements:
         """Parse requirements from 402 response (Body or Header)."""
-        # 1. Try V2 Body (JSON)
+        # Try V2 Body (JSON)
         try:
             data = response.json()
-            # If body is wrapped or raw, adapt here. Assuming direct fields or "requirements" key.
             if "requirements" in data:
                 data = data["requirements"]
 
@@ -79,7 +68,7 @@ class PaymentRequirements:
         except Exception:
             pass
 
-        # 2. Try V1 Header
+        # Try V1 Header
         header_val = response.headers.get(HEADER_PAYMENT_REQUIRED_V1)
         if header_val:
             return cls.from_header(header_val)
@@ -181,7 +170,7 @@ class X402Adapter(ProtocolAdapter):
         """Return payment method type."""
         return PaymentMethod.X402
 
-    def supports(self, recipient: str, **kwargs: Any) -> bool:
+    def supports(self, recipient: str, source_network: Network | str | None = None, destination_chain: Network | str | None = None, **kwargs: Any) -> bool:
         """
         Check if recipient is a URL (potentially x402-enabled).
 
@@ -224,23 +213,25 @@ class X402Adapter(ProtocolAdapter):
         wallet_id: str,
         recipient: str,
         amount: Decimal,
-        purpose: str | None = None,
-        http_method: str = "GET",
-        http_body: Any = None,
-        http_headers: dict[str, str] | None = None,
         fee_level: FeeLevel = FeeLevel.MEDIUM,
+        idempotency_key: str | None = None,
+        purpose: str | None = None,
+        destination_chain: Network | str | None = None,
+        source_network: Network | str | None = None,
+        wait_for_completion: bool = False,
+        timeout_seconds: float | None = None,
         **kwargs: Any,
     ) -> PaymentResult:
         """Execute an x402 payment (V2)."""
         url = recipient
 
         try:
-            # Step 1: Initial (Check 402)
+            # Check for 402
             response, requirements = await self._request_with_402_check(
                 url,
-                method=http_method,
-                json=http_body if http_body else None,
-                headers=http_headers,
+                method="GET",
+                json=None,
+                headers=None,
             )
 
             if response.status_code != 402:
@@ -267,7 +258,7 @@ class X402Adapter(ProtocolAdapter):
                     error="Server returned 402 but extraction failed",
                 )
 
-            # Step 2: Validate Amount
+            # Validate Amount
             required_amount = requirements.get_amount_usdc()
             if required_amount > amount:
                 return PaymentResult(
@@ -281,7 +272,7 @@ class X402Adapter(ProtocolAdapter):
                     error=f"Required {required_amount} > Max {amount}",
                 )
 
-            # Step 3: Transfer
+            # Transfer to seller
             payment_address = requirements.recipient
             if not payment_address:
                 return PaymentResult(
@@ -295,78 +286,151 @@ class X402Adapter(ProtocolAdapter):
                     error="No payment address found in requirements",
                 )
 
-            transfer_result = self._wallet_service.transfer(
-                wallet_id=wallet_id,
-                destination_address=payment_address,
-                amount=required_amount,
-                fee_level=fee_level,
-                wait_for_completion=True,
-            )
+            # Resolve network
+            from omniagentpay.core.types import Network
+            if source_network:
+                if isinstance(source_network, Network):
+                    agent_network = source_network
+                else:
+                    agent_network = Network.from_string(str(source_network))
+            else:
+                agent_wallet = self._wallet_service.get_wallet(wallet_id)
+                agent_network = Network.from_string(agent_wallet.blockchain)
 
-            if not transfer_result.success:
+            # Parse seller's network from requirements - MUST succeed
+            seller_network_str = requirements.network.upper().replace("-", "_")
+            try:
+                seller_network = Network.from_string(seller_network_str)
+            except Exception as e:
                 return PaymentResult(
                     success=False,
-                    transaction_id=transfer_result.transaction.id
-                    if transfer_result.transaction
-                    else None,
-                    blockchain_tx=transfer_result.tx_hash,
+                    transaction_id=None,
+                    blockchain_tx=None,
                     amount=required_amount,
                     recipient=url,
                     method=self.method,
                     status=PaymentStatus.FAILED,
-                    error=f"Transfer failed: {transfer_result.error}",
+                    error=f"Invalid network in payment requirements: {requirements.network}",
                 )
 
-            # Step 4: Create Payload (V2)
+            # Check if cross-chain transfer is needed
+            is_cross_chain = agent_network != seller_network
+
+            if is_cross_chain:
+                # Cross-chain: Use GatewayAdapter (CCTP)
+                self._logger.info(
+                    f"x402 cross-chain: {agent_network.value} → {seller_network.value}"
+                )
+                from omniagentpay.protocols.gateway import GatewayAdapter
+                
+                gateway = GatewayAdapter(self._config, self._wallet_service)
+                gateway_result = await gateway.execute(
+                    wallet_id=wallet_id,
+                    recipient=payment_address,
+                    amount=required_amount,
+                    purpose=purpose,
+                    fee_level=fee_level,
+                    wait_for_completion=True,
+                    destination_chain=seller_network,
+                    source_network=agent_network,
+                )
+
+                if not gateway_result.success:
+                    return PaymentResult(
+                        success=False,
+                        transaction_id=gateway_result.transaction_id,
+                        blockchain_tx=gateway_result.blockchain_tx,
+                        amount=required_amount,
+                        recipient=url,
+                        method=self.method,
+                        status=PaymentStatus.FAILED,
+                        error=f"Cross-chain transfer failed: {gateway_result.error}",
+                    )
+
+                # Use gateway result for payment proof
+                transfer_tx_hash = gateway_result.blockchain_tx
+                transfer_tx_id = gateway_result.transaction_id
+            else:
+                # Same chain: Direct transfer
+                transfer_result = self._wallet_service.transfer(
+                    wallet_id=wallet_id,
+                    destination_address=payment_address,
+                    amount=required_amount,
+                    fee_level=fee_level,
+                    wait_for_completion=True,
+                )
+
+                if not transfer_result.success:
+                    return PaymentResult(
+                        success=False,
+                        transaction_id=transfer_result.transaction.id
+                        if transfer_result.transaction
+                        else None,
+                        blockchain_tx=transfer_result.tx_hash,
+                        amount=required_amount,
+                        recipient=url,
+                        method=self.method,
+                        status=PaymentStatus.FAILED,
+                        error=f"Transfer failed: {transfer_result.error}",
+                    )
+
+                transfer_tx_hash = transfer_result.tx_hash
+                transfer_tx_id = (
+                    transfer_result.transaction.id if transfer_result.transaction else None
+                )
+
+            # Create Payload (V2)
             payload = PaymentPayload(
                 x402_version=2,
                 scheme=requirements.scheme,
                 network=requirements.network,
                 resource=url,
                 payload={
-                    "transactionHash": transfer_result.tx_hash,
+                    "transactionHash": transfer_tx_hash,
                     "fromAddress": self._wallet_service.get_wallet(wallet_id).address,
                     "toAddress": payment_address,
                     "amount": str(required_amount),
                 },
             )
 
-            # Step 5: Retry with PAYMENT-SIGNATURE
+            # Retry with PAYMENT-SIGNATURE
             payment_header = payload.to_header()
-            headers = http_headers.copy() if http_headers else {}
-            headers[HEADER_PAYMENT_SIGNATURE] = payment_header
+            headers = {HEADER_PAYMENT_SIGNATURE: payment_header}
 
             client = await self._get_http_client()
             final_response = await client.request(
-                http_method,
+                "GET",
                 url,
-                json=http_body if http_body else None,
                 headers=headers,
             )
 
             if final_response.status_code == 200:
+                # Parse response body
+                try:
+                    response_data = final_response.json()
+                except Exception:
+                    response_data = final_response.text
+                
                 return PaymentResult(
                     success=True,
-                    transaction_id=transfer_result.transaction.id
-                    if transfer_result.transaction
-                    else None,
-                    blockchain_tx=transfer_result.tx_hash,
+                    transaction_id=transfer_tx_id,
+                    blockchain_tx=transfer_tx_hash,
                     amount=required_amount,
                     recipient=url,
                     method=self.method,
                     status=PaymentStatus.COMPLETED,
+                    resource_data=response_data,  # Store the actual API response
                     metadata={
                         "http_status": final_response.status_code,
                         "payment_response": final_response.headers.get(HEADER_PAYMENT_RESPONSE, ""),
+                        "cross_chain": is_cross_chain,
                     },
                 )
             else:
                 return PaymentResult(
                     success=False,
-                    transaction_id=transfer_result.transaction.id
-                    if transfer_result.transaction
-                    else None,
-                    blockchain_tx=transfer_result.tx_hash,
+                    transaction_id=transfer_tx_id,
+                    blockchain_tx=transfer_tx_hash,
                     amount=required_amount,
                     recipient=url,
                     method=self.method,

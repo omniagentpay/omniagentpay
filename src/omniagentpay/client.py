@@ -1,8 +1,4 @@
-"""
-OmniAgentPayClient - Main SDK entry point.
-
-Multi-tenant architecture: supports multiple agents/wallets with per-wallet guards.
-"""
+"""OmniAgentPayClient - Main SDK entry point."""
 
 from __future__ import annotations
 
@@ -52,37 +48,10 @@ class OmniAgentPay:
 
     Multi-tenant design: serves multiple agents/wallets with per-wallet guards.
 
-    Initialization requires only:
+    Initialization requires:
     - circle_api_key
     - entity_secret
     - network
-
-    All operations require explicit wallet_id.
-
-    Example:
-        >>> from omniagentpay import OmniAgentPay, BudgetGuard
-        >>> from decimal import Decimal
-        >>>
-        >>> # Initialize client (multi-tenant)
-        >>> client = OmniAgentPay(
-        ...     circle_api_key="sk_...",
-        ...     entity_secret="...",
-        ...     network=Network.ARC_TESTNET,
-        ... )
-        >>>
-        >>> # Create wallet for an agent
-        >>> wallet_set = client.wallet.create_wallet_set(name="agent-1")
-        >>> wallet = client.wallet.create_wallet(wallet_set_id=wallet_set.id)
-        >>>
-        >>> # Add guards for this wallet
-        >>> client.guards.add_guard(wallet.id, BudgetGuard(daily_limit=Decimal("100")))
-        >>>
-        >>> # Make a payment (wallet_id required)
-        >>> result = await client.pay(
-        ...     wallet_id=wallet.id,
-        ...     recipient="0x742d35Cc6634C0532925a3b844Bc9e7595...",
-        ...     amount=Decimal("10.00"),
-        ... )
     """
 
     def __init__(
@@ -110,7 +79,6 @@ class OmniAgentPay:
 
         configure_logging(level=log_level)
         self._logger = get_logger("client")
-
         self._logger.info(f"Initializing OmniAgentPay SDK (Network: {network.value})")
 
         if not circle_api_key:
@@ -128,33 +96,21 @@ class OmniAgentPay:
                 entity_secret = auto_setup_entity_secret(circle_api_key, logger=self._logger)
                 self._logger.info("Entity secret auto-generated and registered.")
             except Exception as e:
-                self._logger.error(
-                    f"Auto-setup failed: {e}\n"
-                    "Please set ENTITY_SECRET in your .env file or run:\n"
-                    "  from omniagentpay.onboarding import quick_setup\n"
-                    "  quick_setup('YOUR_API_KEY')"
-                )
+                self._logger.error(f"Auto-setup failed: {e}")
                 raise
 
         if not circle_api_key:
             self._logger.warning("CIRCLE_API_KEY not set. SDK will fail.")
 
-        # Build config
-        # Build config using from_env to pick up defaults and other env vars
         self._config = Config.from_env(
             circle_api_key=circle_api_key,
             entity_secret=entity_secret,
             network=network,
         )
 
-        # Storage and Ledger
-        self._storage = get_storage()  # Load from env or default to memory
+        self._storage = get_storage()
         self._ledger = Ledger(self._storage)
-
-        # Guard manager (per-wallet/wallet-set) - inject storage
         self._guard_manager = GuardManager(self._storage)
-
-        # Core services (initialized immediately)
         self._circle_client = CircleClient(self._config)
 
         self._wallet_service = WalletService(
@@ -162,25 +118,14 @@ class OmniAgentPay:
             self._circle_client,
         )
 
-        # Router with default adapters
         self._router = PaymentRouter(self._config, self._wallet_service)
-
-        # Register adapters (Transfer, X402, Gateway)
         self._router.register_adapter(TransferAdapter(self._config, self._wallet_service))
         self._router.register_adapter(X402Adapter(self._config, self._wallet_service))
-
         self._router.register_adapter(GatewayAdapter(self._config, self._wallet_service))
 
-        # Payment Intents
         self._intent_service = PaymentIntentService(self._storage)
-
-        # Batch Processor
         self._batch_processor = BatchProcessor(self._router)
-
-        # Webhooks
         self._webhook_parser = WebhookParser()
-
-    # ==================== Properties ====================
 
     @property
     def config(self) -> Config:
@@ -207,32 +152,17 @@ class OmniAgentPay:
         """Get webhook parser for verifying and parsing events."""
         return self._webhook_parser
 
-    # ==================== Context Manager ====================
-
     async def __aenter__(self) -> OmniAgentPay:
         """Async context manager entry."""
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
-        """Async context manager exit - cleanup resources."""
-        # Future: Close HTTP connection pools here
+        """Async context manager exit."""
         pass
 
-    # ==================== Quick Helpers ====================
-
     async def get_balance(self, wallet_id: str) -> Decimal:
-        """
-        Get USDC balance for a wallet.
-
-        Args:
-            wallet_id: Wallet ID to check
-
-        Returns:
-            USDC balance as Decimal
-        """
+        """Get USDC balance for a wallet."""
         return self._wallet_service.get_usdc_balance_amount(wallet_id)
-
-    # ==================== Wallet Operations ====================
 
     async def create_wallet(
         self,
@@ -284,19 +214,8 @@ class OmniAgentPay:
     async def list_transactions(
         self, wallet_id: str | None = None, blockchain: Network | str | None = None
     ) -> list[TransactionInfo]:
-        """
-        List transactions for a wallet or globally.
-
-        Args:
-            wallet_id: Filter by wallet ID
-            blockchain: Filter by blockchain
-
-        Returns:
-            List of transactions
-        """
+        """List transactions for a wallet or globally."""
         return self._wallet_service.list_transactions(wallet_id, blockchain)
-
-    # ==================== Payment Operations ====================
 
     async def pay(
         self,
@@ -316,6 +235,26 @@ class OmniAgentPay:
     ) -> PaymentResult:
         """
         Execute a payment with automatic routing (Transfer, x402, or Gateway) and guard checks.
+        
+        Args:
+            wallet_id: Source wallet ID (REQUIRED)
+            recipient: Payment recipient (address or URL)
+            amount: Amount to pay (USDC)
+            destination_chain: Target blockchain for cross-chain (optional)
+            wallet_set_id: Wallet set ID for hierarchical guards
+            purpose: Human-readable purpose
+            idempotency_key: Unique key for deduplication
+            fee_level: Transaction fee level
+            skip_guards: Skip guard checks (dangerous!)
+            metadata: Additional metadata
+            wait_for_completion: Wait for transaction confirmation
+            timeout_seconds: Maximum wait time
+            **kwargs: Additional options including:
+                - use_fast_transfer (bool): Use CCTP Fast Transfer (~2-5s) vs Standard (~13-19m). Default: True
+                - source_network (Network): Override source network detection
+        
+        Returns:
+            PaymentResult with transaction details
         """
         if not wallet_id:
             raise ValidationError("wallet_id is required")
@@ -498,18 +437,8 @@ class OmniAgentPay:
         return self._router.can_handle(recipient)
 
     def detect_method(self, recipient: str) -> PaymentMethod | None:
-        """
-        Detect which payment method would be used for a recipient.
-
-        Args:
-            recipient: Payment recipient
-
-        Returns:
-            Payment method or None
-        """
+        """Detect which payment method would be used for a recipient."""
         return self._router.detect_method(recipient)
-
-    # ==================== Payment Intents ====================
 
     @property
     def intents(self) -> PaymentIntentService:
@@ -525,27 +454,8 @@ class OmniAgentPay:
         idempotency_key: str | None = None,
         **kwargs: Any,
     ) -> PaymentIntent:
-        """
-        Create a Payment Intent (Authorize).
-
-        Validates routing and guards but does not execute payment.
-
-        Args:
-            wallet_id: Source wallet ID
-            recipient: Payment recipient
-            amount: Amount to pay
-            purpose: Human-readable purpose
-            idempotency_key: Idempotency key
-            **kwargs: Additional context
-
-        Returns:
-            Created PaymentIntent
-
-        Raises:
-            PaymentError: If authorization logic (guards/simulation) fails
-        """
-        # 1. Simulate check (Routing + Guards) strictly
-        # We force strict checking to ensure it WOULD succeed
+        """Create a Payment Intent (Authorize)."""
+        # Simulate check (Routing + Guards) strictly
         sim_result = await self.simulate(
             wallet_id=wallet_id, recipient=recipient, amount=amount, **kwargs
         )
@@ -553,7 +463,7 @@ class OmniAgentPay:
         if not sim_result.would_succeed:
             raise PaymentError(f"Authorization failed: {sim_result.reason}")
 
-        # 2. Create Intent
+        # Create Intent
         metadata = kwargs.copy()
         metadata.update(
             {
@@ -569,18 +479,7 @@ class OmniAgentPay:
         return intent
 
     async def confirm_payment_intent(self, intent_id: str) -> PaymentResult:
-        """
-        Confirm and execute a Payment Intent (Capture).
-
-        Args:
-            intent_id: ID of intent to confirm
-
-        Returns:
-            PaymentResult
-
-        Raises:
-            ValidationError: If intent invalid or already processed
-        """
+        """Confirm and execute a Payment Intent (Capture)."""
         intent = await self._intent_service.get(intent_id)
         if not intent:
             raise ValidationError(f"Intent not found: {intent_id}")
@@ -653,36 +552,23 @@ class OmniAgentPay:
         return await self._batch_processor.process(requests, concurrency)
 
     async def sync_transaction(self, entry_id: str) -> LedgerEntry:
-        """
-        Synchronize a ledger entry with the provider status.
-
-        Args:
-            entry_id: Ledger entry ID
-
-        Returns:
-            Updated LedgerEntry
-
-        Raises:
-            ValidationError: If entry not found or no transaction ID
-        """
+        """Synchronize a ledger entry with the provider status."""
         entry = await self._ledger.get(entry_id)
         if not entry:
             raise ValidationError(f"Ledger entry not found: {entry_id}")
 
         tx_id = entry.metadata.get("transaction_id")
         if not tx_id:
-            # If no transaction ID, we can't sync with provider
-            # This happens if pay() failed before getting an ID
             raise ValidationError("Ledger entry has no transaction ID to sync")
 
-        # Call Provider (Blocking call)
+        # Call Provider
         try:
             tx_info = self._circle_client.get_transaction(tx_id)
         except Exception as e:
             raise PaymentError(f"Failed to fetch transaction from provider: {e}") from e
 
         # Map status
-        new_status = entry.status  # Default to current
+        new_status = entry.status
         if tx_info.state == "COMPLETE":
             new_status = LedgerEntryStatus.COMPLETED
         elif tx_info.state == "FAILED":
@@ -704,11 +590,8 @@ class OmniAgentPay:
             },
         )
 
-        # Reload and return
         updated = await self._ledger.get(entry.id)
         return updated  # type: ignore
-
-    # ==================== Guard Helpers ====================
 
     async def add_budget_guard(
         self,

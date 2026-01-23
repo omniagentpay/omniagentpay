@@ -23,18 +23,27 @@ def _get_env_var(name: str, default: str | None = None, required: bool = False) 
 
 @dataclass(frozen=True)
 class Config:
-    """Immutable configuration for OmniAgentPay SDK."""
+    """SDK configuration."""
 
     circle_api_key: str
     entity_secret: str
-    network: Network = Network.ARC_TESTNET
-    default_wallet_id: str | None = None
-
-    # API endpoints
+    network: Network = Network.ETH
+    storage_backend: str = "memory"
+    redis_url: str | None = None
+    log_level: str = "INFO"
+    # Timeout configuration
+    http_timeout: float = 30.0  # HTTP client timeout in seconds
+    cctp_timeout: float = 300.0  # CCTP transfer timeout (5 minutes)
+    # Rate limiting
+    enable_rate_limiting: bool = True  # Enable Circle API rate limiting
+    max_api_calls_per_second: int = 30  # Conservative limit (Circle allows 35) endpoints
     circle_api_base_url: str = "https://api.circle.com/v1/w3s"
 
     # x402 facilitator (thirdweb)
     x402_facilitator_url: str = "https://x402.org/facilitator"
+
+    # Gateway API for gasless transfers
+    gateway_api_url: str = "https://gateway-api-testnet.circle.com/v1"
 
     # Timeouts (seconds)
     request_timeout: float = 30.0
@@ -42,8 +51,11 @@ class Config:
     transaction_poll_timeout: float = 120.0
 
     # Environment & Logging
-    log_level: str = "INFO"
+    # log_level is already defined above
     env: str = "development"
+    
+    # Wallet defaults
+    default_wallet_id: str | None = None
 
     def __post_init__(self) -> None:
         if not self.circle_api_key:
@@ -84,6 +96,7 @@ class Config:
             default_wallet_id=default_wallet_id,
             circle_api_base_url=overrides.get("circle_api_base_url", cls.circle_api_base_url),
             x402_facilitator_url=overrides.get("x402_facilitator_url", cls.x402_facilitator_url),
+            gateway_api_url=overrides.get("gateway_api_url", cls.gateway_api_url),
             request_timeout=overrides.get("request_timeout", cls.request_timeout),
             transaction_poll_interval=overrides.get(
                 "transaction_poll_interval", cls.transaction_poll_interval
@@ -104,6 +117,7 @@ class Config:
             "default_wallet_id": self.default_wallet_id,
             "circle_api_base_url": self.circle_api_base_url,
             "x402_facilitator_url": self.x402_facilitator_url,
+            "gateway_api_url": self.gateway_api_url,
             "request_timeout": self.request_timeout,
             "transaction_poll_interval": self.transaction_poll_interval,
             "transaction_poll_timeout": self.transaction_poll_timeout,

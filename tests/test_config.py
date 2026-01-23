@@ -21,7 +21,7 @@ class TestConfig:
 
         assert config.circle_api_key == "test_api_key_123"
         assert config.entity_secret == "test_entity_secret_456"
-        assert config.network == Network.ARC_TESTNET  # default
+        assert config.network == Network.ETH  # default
 
     def test_create_config_with_all_options(self) -> None:
         """Test creating config with all options."""

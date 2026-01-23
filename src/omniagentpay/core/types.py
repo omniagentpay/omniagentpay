@@ -99,6 +99,31 @@ class Network(str, Enum):
         return self in (Network.SOL, Network.SOL_DEVNET)
 
 
+def normalize_network(network: Network | str | None) -> Network | None:
+    """
+    Normalize a network value to a Network enum.
+    
+    Handles:
+    - None -> None
+    - Network enum -> Network enum (unchanged)
+    - str -> Network enum (converted)
+    
+    Args:
+        network: Network enum, string, or None
+        
+    Returns:
+        Network enum or None
+        
+    Raises:
+        ValueError: If string cannot be converted to Network
+    """
+    if network is None:
+        return None
+    if isinstance(network, Network):
+        return network
+    return Network.from_string(str(network))
+
+
 class PaymentMethod(str, Enum):
     """Payment method types."""
 

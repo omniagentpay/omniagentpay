@@ -36,7 +36,13 @@ def client_mocked():
     balance = MagicMock()
     balance.amount = Decimal("1000000.00")
     client._wallet_service.get_usdc_balance.return_value = balance
+    client._wallet_service.get_usdc_balance.return_value = balance
     client._wallet_service.get_usdc_balance_amount.return_value = Decimal("1000000.00")
+    
+    # Configure get_wallet mock to return an object with a valid blockchain string
+    mock_wallet = MagicMock()
+    mock_wallet.blockchain = "ARC-TESTNET"
+    client._wallet_service.get_wallet.return_value = mock_wallet
 
     # CRITICAL: Re-initialize router to use the Mocked Wallet Service
     client._router = PaymentRouter(client._config, client._wallet_service)

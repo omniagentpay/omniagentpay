@@ -283,7 +283,7 @@ Execute a payment with automatic routing (Transfer, x402, or Gateway) and guard 
 
 **Returns:** `PaymentResult` - Payment execution result
 
-**Example:**
+**Example (Same-chain):**
 ```python
 from decimal import Decimal
 
@@ -294,6 +294,23 @@ result = await client.pay(
     purpose="API subscription payment"
 )
 ```
+
+**Example (Cross-chain via CCTP):**
+```python
+from decimal import Decimal
+from omniagentpay import Network
+
+# Transfer from Base to Ethereum
+result = await client.pay(
+    wallet_id="wallet-123",  # Wallet on Base
+    recipient="0x742d35Cc6634C0532925a3b844Bc9e7595...",  # Address on Ethereum
+    amount=Decimal("10.00"),
+    destination_chain=Network.ETH,  # REQUIRED for cross-chain
+    purpose="Cross-chain payment"
+)
+```
+
+> **Note:** For cross-chain transfers, `destination_chain` is **required**. The `source_network` is automatically inferred from the wallet. If `destination_chain` is not provided when networks differ, the payment will fail with an error.
 
 ---
 

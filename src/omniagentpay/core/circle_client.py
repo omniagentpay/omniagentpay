@@ -353,3 +353,66 @@ class CircleClient:
         """Find the USDC token ID for a wallet's blockchain."""
         balance = self.get_usdc_balance(wallet_id)
         return balance.token.id if balance else None
+
+    def create_contract_execution(
+        self,
+        wallet_id: str,
+        contract_address: str,
+        abi_function_signature: str,
+        abi_parameters: list[str],
+        fee_level: FeeLevel = FeeLevel.MEDIUM,
+        idempotency_key: str | None = None,
+    ) -> TransactionInfo:
+        """
+        Execute a smart contract function.
+
+        This enables CCTP by calling TokenMessenger.depositForBurn().
+
+        Args:
+            wallet_id: Source wallet ID
+            contract_address: Contract to call (e.g., TokenMessenger)
+            abi_function_signature: Function signature (e.g., "depositForBurn(uint256,uint32,bytes32,address)")
+            abi_parameters: Function parameters as strings
+            fee_level: Gas fee level
+            idempotency_key: Optional idempotency key
+
+        Returns:
+            TransactionInfo for the contract call
+        """
+        try:
+            if not idempotency_key:
+                idempotency_key = str(uuid.uuid4())
+
+            ciphertext = self._get_ciphertext()
+
+            request = (
+                developer_controlled_wallets.CreateContractExecutionTransactionForDeveloperRequest.from_dict(
+                    {
+                        "idempotencyKey": idempotency_key,
+                        "entitySecretCiphertext": ciphertext,
+                        "walletId": wallet_id,
+                        "contractAddress": contract_address,
+                        "abiFunctionSignature": abi_function_signature,
+                        "abiParameters": abi_parameters,
+                        "feeLevel": fee_level.value,
+                    }
+                )
+            )
+            response = self._transactions_api.create_developer_transaction_contract_execution(
+                request
+            )
+
+            tx_data = response.data.to_dict()
+            return TransactionInfo.from_api_response(tx_data)
+
+        except developer_controlled_wallets.ApiException as e:
+            raise WalletError(
+                f"Failed to execute contract: {e}",
+                wallet_id=wallet_id,
+                details={
+                    "api_error": str(e),
+                    "contract": contract_address,
+                    "function": abi_function_signature,
+                },
+            ) from e
+

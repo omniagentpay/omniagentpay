@@ -10,7 +10,7 @@ from abc import ABC, abstractmethod
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
-from omniagentpay.core.types import PaymentMethod, PaymentResult
+from omniagentpay.core.types import FeeLevel, Network, PaymentMethod, PaymentResult
 
 if TYPE_CHECKING:
     pass
@@ -35,12 +35,14 @@ class ProtocolAdapter(ABC):
         ...
 
     @abstractmethod
-    def supports(self, recipient: str, **kwargs: Any) -> bool:
+    def supports(self, recipient: str, source_network: Network | str | None = None, destination_chain: Network | str | None = None, **kwargs: Any) -> bool:
         """
         Check if this adapter can handle the given recipient.
 
         Args:
             recipient: Payment recipient (URL, address, etc.)
+            source_network: Source network (optional)
+            destination_chain: Destination chain (optional)
             **kwargs: Additional context (e.g. destination_chain)
 
         Returns:
@@ -54,7 +56,13 @@ class ProtocolAdapter(ABC):
         wallet_id: str,
         recipient: str,
         amount: Decimal,
+        fee_level: FeeLevel = FeeLevel.MEDIUM,
+        idempotency_key: str | None = None,
         purpose: str | None = None,
+        destination_chain: Network | str | None = None,
+        source_network: Network | str | None = None,
+        wait_for_completion: bool = False,
+        timeout_seconds: float | None = None,
         **kwargs: Any,
     ) -> PaymentResult:
         """
@@ -64,7 +72,13 @@ class ProtocolAdapter(ABC):
             wallet_id: Source wallet ID
             recipient: Payment recipient
             amount: Amount to pay
+            fee_level: Fee level (optional)
+            idempotency_key: Idempotency key (optional)
             purpose: Human-readable purpose
+            destination_chain: Destination chain (optional)
+            source_network: Source network (optional)
+            wait_for_completion: Wait for completion (optional)
+            timeout_seconds: Timeout in seconds (optional)
             **kwargs: Additional adapter-specific parameters
 
         Returns:

@@ -14,6 +14,7 @@ from omniagentpay.core.exceptions import InsufficientBalanceError, WalletError
 from omniagentpay.core.logging import get_logger
 from omniagentpay.core.types import (
     FeeLevel,
+    Network,
     PaymentMethod,
     PaymentResult,
     PaymentStatus,
@@ -50,12 +51,12 @@ class TransferAdapter(ProtocolAdapter):
     def method(self) -> PaymentMethod:
         return PaymentMethod.TRANSFER
 
-    def supports(self, recipient: str, **kwargs: Any) -> bool:
+    def supports(self, recipient: str, source_network: Network | str | None = None, destination_chain: Network | str | None = None, **kwargs: Any) -> bool:
         """Check if recipient is a valid blockchain address for current network."""
         # Determine network context (Source Wallet wins over Global Config)
-        network = kwargs.get("source_network") or self._config.network
+        network = source_network or self._config.network
 
-        dest_chain = kwargs.get("destination_chain")
+        dest_chain = destination_chain
         if dest_chain:
             d_str = str(dest_chain).upper()
             n_str = str(network).upper()
@@ -83,8 +84,11 @@ class TransferAdapter(ProtocolAdapter):
         wallet_id: str,
         recipient: str,
         amount: Decimal,
-        purpose: str | None = None,
         fee_level: FeeLevel = FeeLevel.MEDIUM,
+        idempotency_key: str | None = None,
+        purpose: str | None = None,
+        destination_chain: Network | str | None = None,
+        source_network: Network | str | None = None,
         wait_for_completion: bool = False,
         timeout_seconds: float | None = None,
         **kwargs: Any,
@@ -99,7 +103,7 @@ class TransferAdapter(ProtocolAdapter):
                 check_balance=True,
                 wait_for_completion=wait_for_completion,
                 timeout_seconds=timeout_seconds,
-                idempotency_key=kwargs.get("idempotency_key"),
+                idempotency_key=idempotency_key,
             )
         except (WalletError, InsufficientBalanceError) as e:
             return PaymentResult(
@@ -147,6 +151,9 @@ class TransferAdapter(ProtocolAdapter):
                 "purpose": purpose,
                 "fee_level": fee_level.value,
                 "tx_state": tx.state.value if tx else None,
+                "idempotency_key": idempotency_key,
+                "destination_chain": destination_chain,
+                "source_network": source_network,
             },
         )
 

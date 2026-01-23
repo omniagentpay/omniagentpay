@@ -1,8 +1,4 @@
-"""
-PaymentRouter - Routes payments to appropriate protocol adapters.
-
-The router examines the recipient and selects the best adapter to handle the payment.
-"""
+"""PaymentRouter - Routes payments to appropriate protocol adapters."""
 
 from __future__ import annotations
 
@@ -11,6 +7,7 @@ from typing import TYPE_CHECKING, Any
 
 from omniagentpay.core.logging import get_logger
 from omniagentpay.core.types import (
+    FeeLevel,
     Network,
     PaymentMethod,
     PaymentResult,
@@ -47,15 +44,15 @@ class PaymentRouter:
     def get_adapters(self) -> list[ProtocolAdapter]:
         return list(self._adapters)
 
-    def detect_method(self, recipient: str, **kwargs: Any) -> PaymentMethod | None:
+    def detect_method(self, recipient: str, source_network: Network | str | None = None, destination_chain: Network | str | None = None, **kwargs: Any) -> PaymentMethod | None:
         for adapter in self._adapters:
-            if adapter.supports(recipient, **kwargs):
+            if adapter.supports(recipient, source_network=source_network, destination_chain=destination_chain, **kwargs):
                 return adapter.method
         return None
 
-    def _find_adapter(self, recipient: str, **kwargs: Any) -> ProtocolAdapter | None:
+    def _find_adapter(self, recipient: str, source_network: Network | str | None = None, destination_chain: Network | str | None = None, **kwargs: Any) -> ProtocolAdapter | None:
         for adapter in self._adapters:
-            if adapter.supports(recipient, **kwargs):
+            if adapter.supports(recipient, source_network=source_network, destination_chain=destination_chain, **kwargs):
                 return adapter
         return None
 
@@ -64,6 +61,7 @@ class PaymentRouter:
         wallet_id: str,
         recipient: str,
         amount: Decimal | str,
+        fee_level: FeeLevel = FeeLevel.MEDIUM,
         purpose: str | None = None,
         guards_passed: list[str] | None = None,
         idempotency_key: str | None = None,
@@ -75,14 +73,11 @@ class PaymentRouter:
         """Execute a payment via the appropriate method."""
         amount_decimal = Decimal(str(amount))
 
-        # Resolve source network from wallet if possible
-        try:
-            wallet = self._wallet_service.get_wallet(wallet_id)
-            kwargs["source_network"] = Network.from_string(wallet.blockchain)
-        except Exception:
-            pass
+        # Resolve source network
+        wallet = self._wallet_service.get_wallet(wallet_id)
+        source_network = Network.from_string(wallet.blockchain)
 
-        adapter = self._find_adapter(recipient, destination_chain=destination_chain, **kwargs)
+        adapter = self._find_adapter(recipient, destination_chain=destination_chain, source_network=source_network, **kwargs)
         if not adapter:
             self._logger.error(f"No adapter found for recipient: {recipient}")
             return PaymentResult(
@@ -101,7 +96,9 @@ class PaymentRouter:
             wallet_id=wallet_id,
             recipient=recipient,
             amount=amount_decimal,
+            source_network=source_network,
             purpose=purpose,
+            fee_level=fee_level,
             idempotency_key=idempotency_key,
             destination_chain=destination_chain,
             wait_for_completion=wait_for_completion,
@@ -134,15 +131,13 @@ class PaymentRouter:
         """
         amount_decimal = Decimal(str(amount))
 
-        # Resolve source network
-        try:
-            wallet = self._wallet_service.get_wallet(wallet_id)
-            kwargs["source_network"] = Network.from_string(wallet.blockchain)
-        except Exception:
-            pass
+        # Resolve source network from wallet - MUST succeed
+        wallet = self._wallet_service.get_wallet(wallet_id)
+        source_network = Network.from_string(wallet.blockchain)
+        destination_chain = kwargs.get("destination_chain")
 
         # Find adapter
-        adapter = self._find_adapter(recipient, **kwargs)
+        adapter = self._find_adapter(recipient, source_network=source_network, destination_chain=destination_chain, **kwargs)
 
         if not adapter:
             return SimulationResult(
